@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "WebSearch",
+      "WebFetch(domain:docs.brew.sh)",
+      "WebFetch(domain:goreleaser.com)",
+      "Bash(go get:*)",
+      "Bash(go build:*)",
+      "Bash(go mod tidy:*)",
+      "Bash(go test:*)",
+      "WebFetch(domain:proxy.golang.org)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
