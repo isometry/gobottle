@@ -24,6 +24,7 @@ type BuildOptions struct {
 	Binaries     []string // Binary names to include
 	Cellar       string
 	Rebuild      int
+	Tap          string // Tap name for INSTALL_RECEIPT.json (e.g., "user/homebrew-tap")
 }
 
 // NewBuilder creates a new bottle builder with a temp work directory
@@ -90,6 +91,31 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	// Add the stub to the files map
 	stubArchivePath := filepath.Join(opts.Formula, opts.Version, ".brew", opts.Formula+".rb")
 	files[stubArchivePath] = stubPath
+
+	// Step 3b: Create INSTALL_RECEIPT.json
+	tab := NewTab(TabOptions{
+		Formula:   opts.Formula,
+		Version:   opts.Version,
+		Arch:      opts.Platform.Arch,
+		OS:        opts.Platform.OS,
+		OSVersion: opts.Platform.OSVersion,
+		Tap:       opts.Tap,
+		Compiler:  "go",
+	})
+
+	receiptContent, err := tab.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal INSTALL_RECEIPT.json: %w", err)
+	}
+
+	receiptPath := filepath.Join(brewDir, "INSTALL_RECEIPT.json")
+	if err := os.WriteFile(receiptPath, receiptContent, 0644); err != nil {
+		return nil, fmt.Errorf("failed to create INSTALL_RECEIPT.json: %w", err)
+	}
+
+	// Add the receipt to the files map
+	receiptArchivePath := filepath.Join(opts.Formula, opts.Version, ".brew", "INSTALL_RECEIPT.json")
+	files[receiptArchivePath] = receiptPath
 
 	// Step 4: Create bottle tarball with proper naming
 	bottleName := fmt.Sprintf("%s--%s.%s.bottle.tar.gz", opts.Formula, opts.Version, opts.Platform.Tag)

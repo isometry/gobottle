@@ -55,6 +55,12 @@ type BottleOptions struct {
 	// Build options
 	Snapshot bool // Allow building from dirty working tree
 
+	// Go source options (ko-like mode)
+	Packages   []string // Go packages to build
+	Ldflags    string   // ldflags template
+	CGOEnabled bool     // Enable CGO
+	Parallel   int      // Number of parallel builds
+
 	// Output options
 	Output string
 }
@@ -65,20 +71,33 @@ func NewBottleCommand(rootOpts *Options) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "bottle [formula]",
-		Short: "Build and push bottles from GoReleaser artifacts",
-		Long: `Build Homebrew bottles from GoReleaser artifacts and push to GHCR.
+		Short: "Build and push bottles from GoReleaser artifacts or Go source",
+		Long: `Build Homebrew bottles from GoReleaser artifacts or Go source and push to GHCR.
 
 This command orchestrates the full workflow:
-1. Fetches artifacts from GitHub Release or local dist/
+1. Fetches artifacts from GitHub Release, local dist/, or builds from Go source
 2. Discovers supported Homebrew platforms from Homebrew source
 3. Builds bottles for each platform
 4. Pushes bottles to GHCR as OCI artifacts
-5. Updates the tap formula with the bottle block`,
+5. Updates the tap formula with the bottle block
+
+Source types:
+  - local:  Use pre-built archives from dist/ directory (default)
+  - github: Fetch archives from a GitHub release
+  - go:     Build directly from Go source (ko-like mode)`,
 		Example: `  # Build bottles from local dist/ directory
   gobottle bottle myformula --version 1.0.0 --owner myorg
 
   # Build bottles from a GitHub release
   gobottle bottle --formula myformula --source github --owner myorg --repo myrepo --tag v1.0.0
+
+  # Build bottles directly from Go source (ko-like mode)
+  gobottle bottle myformula --source go --packages ./cmd/myapp --version 1.0.0 --owner myorg
+
+  # Build from Go source with ldflags
+  gobottle bottle myformula --source go --packages ./cmd/myapp \
+      --ldflags "-X main.version={{.Version}} -X main.commit={{.Commit}}" \
+      --version 1.0.0 --owner myorg
 
   # Build bottles without pushing to registry (local testing)
   gobottle bottle myformula --version 1.0.0 --owner myorg --push=false
@@ -103,7 +122,7 @@ This command orchestrates the full workflow:
 
 	// Source flags
 	cmd.Flags().StringVar(&opts.Source, "source", "local",
-		"artifact source: 'github' (fetch from release) or 'local' (use dist/)")
+		"artifact source: 'github', 'local', or 'go' (build from source)")
 	cmd.Flags().StringVar(&opts.Owner, "owner", "",
 		"GitHub owner/org (required)")
 	cmd.Flags().StringVar(&opts.Repo, "repo", "",
@@ -112,6 +131,16 @@ This command orchestrates the full workflow:
 		"release tag, e.g., v1.2.3 (required for --source=github)")
 	cmd.Flags().StringVar(&opts.DistPath, "dist", "dist",
 		"path to dist/ directory (for --source=local)")
+
+	// Go source flags (ko-like mode)
+	cmd.Flags().StringSliceVar(&opts.Packages, "packages", nil,
+		"Go packages to build (for --source=go), e.g., ./cmd/myapp")
+	cmd.Flags().StringVar(&opts.Ldflags, "ldflags", "",
+		"ldflags template for go build (supports {{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})")
+	cmd.Flags().BoolVar(&opts.CGOEnabled, "cgo", false,
+		"enable CGO for go build (default: false for portable static binaries)")
+	cmd.Flags().IntVar(&opts.Parallel, "parallel", 0,
+		"number of parallel builds for --source=go (default: CPU count)")
 
 	// Formula flags
 	cmd.Flags().StringVar(&opts.Formula, "formula", "",
@@ -323,6 +352,7 @@ func runBottle(cmd *cobra.Command, rootOpts *Options, opts *BottleOptions) error
 				Binaries:     cfg.BinaryNames(),
 				Cellar:       cfg.Bottle.Cellar,
 				Rebuild:      cfg.Bottle.Rebuild,
+				Tap:          fmt.Sprintf("%s/%s", cfg.Tap.Owner, cfg.Tap.Repo),
 			})
 			if err != nil {
 				return fmt.Errorf("failed to build bottle for %s: %w", plat.Tag, err)
@@ -443,9 +473,44 @@ func createArtifactSource(cfg *config.Config) (artifact.Source, error) {
 			Tag:   cfg.Source.Tag,
 			Token: cfg.Registry.Token,
 		})
+	case "go":
+		return createGoSource(cfg)
 	default:
 		return nil, fmt.Errorf("unknown source type: %s", cfg.Source.Type)
 	}
+}
+
+// createGoSource creates a GoSource for building from Go source
+func createGoSource(cfg *config.Config) (artifact.Source, error) {
+	// Get git info for ldflags template
+	var commit, tag string
+	if repo, err := git.Open("."); err == nil {
+		// Try to get current commit
+		if head, err := repo.GetRemoteURL(); err == nil {
+			_ = head // We don't need the URL, just checking repo is valid
+		}
+		// Get the tag if available
+		if t, err := repo.GetLatestTag(); err == nil && t != "" {
+			tag = t
+		} else if t, err := repo.GetLatestReachableTag(); err == nil && t != "" {
+			tag = t
+		}
+	}
+
+	return artifact.NewGoSource(artifact.GoSourceConfig{
+		Packages:   cfg.Source.Build.Packages,
+		Ldflags:    cfg.Source.Build.Ldflags,
+		Env:        cfg.Source.Build.Env,
+		CGOEnabled: cfg.Source.Build.CGOEnabled,
+		Trimpath:   cfg.Source.Build.Trimpath,
+		Flags:      cfg.Source.Build.Flags,
+		ModDir:     cfg.Source.Build.ModDir,
+		Parallel:   cfg.Source.Build.Parallel,
+		Version:    cfg.Version,
+		Commit:     commit,
+		Tag:        tag,
+		Binaries:   cfg.BinaryNames(),
+	})
 }
 
 // updateTapFormula updates the tap formula with the new bottle block
@@ -534,10 +599,10 @@ func updateTapFormula(ctx context.Context, cfg *config.Config, bottles []*bottle
 
 // BottleOutput represents the JSON output for the bottle command
 type BottleOutput struct {
-	Formula  string        `json:"formula"`
-	Version  string        `json:"version"`
-	Registry string        `json:"registry"`
-	Bottles  []BottleInfo  `json:"bottles"`
+	Formula  string       `json:"formula"`
+	Version  string       `json:"version"`
+	Registry string       `json:"registry"`
+	Bottles  []BottleInfo `json:"bottles"`
 }
 
 // BottleInfo represents a single bottle in JSON output
@@ -588,6 +653,13 @@ func buildConfig(opts *BottleOptions) *config.Config {
 	cfg.Source.Repo = opts.Repo
 	cfg.Source.Tag = opts.Tag
 	cfg.Source.DistPath = opts.DistPath
+
+	// Go source build config
+	cfg.Source.Build.Packages = opts.Packages
+	cfg.Source.Build.Ldflags = opts.Ldflags
+	cfg.Source.Build.CGOEnabled = opts.CGOEnabled
+	cfg.Source.Build.Parallel = opts.Parallel
+	cfg.Source.Build.Trimpath = true // Default to true for reproducible builds
 
 	// Bottle config
 	cfg.Bottle.Cellar = opts.Cellar

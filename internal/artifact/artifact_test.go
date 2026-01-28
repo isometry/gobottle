@@ -259,11 +259,11 @@ func TestFilterArtifacts(t *testing.T) {
 	}
 
 	tests := []struct {
-		name           string
-		os             string
-		arch           string
-		expectedCount  int
-		expectedNames  []string
+		name          string
+		os            string
+		arch          string
+		expectedCount int
+		expectedNames []string
 	}{
 		{
 			name:          "filter by OS darwin",

@@ -17,8 +17,8 @@ import (
 
 const (
 	// MediaTypes as required by Homebrew/OCI spec
-	ConfigMediaType = types.OCIConfigJSON          // "application/vnd.oci.image.config.v1+json"
-	LayerMediaType  = types.OCILayer              // "application/vnd.oci.image.layer.v1.tar+gzip"
+	ConfigMediaType = types.OCIConfigJSON // "application/vnd.oci.image.config.v1+json"
+	LayerMediaType  = types.OCILayer      // "application/vnd.oci.image.layer.v1.tar+gzip"
 )
 
 // Pusher pushes bottles to an OCI registry
@@ -139,7 +139,7 @@ func (p *Pusher) pushIndex(ctx context.Context, version string, bottles []*bottl
 				Platform: p.getPlatform(b),
 				Annotations: map[string]string{
 					"org.opencontainers.image.title": b.BottleName(),
-					"sh.brew.bottle.digest":           b.SHA256,
+					"sh.brew.bottle.digest":          b.SHA256,
 				},
 			},
 		})
@@ -184,8 +184,8 @@ func (p *Pusher) createImage(b *bottle.Bottle) (v1.Image, error) {
 		"org.opencontainers.image.title":       b.BottleName(),
 		"org.opencontainers.image.version":     b.Version,
 		"org.opencontainers.image.description": fmt.Sprintf("Homebrew bottle for %s %s (%s)", b.Formula, b.Version, b.Platform.Tag),
-		"sh.brew.bottle.digest":                 b.SHA256,
-		"sh.brew.bottle.platform":               b.Platform.Tag,
+		"sh.brew.bottle.digest":                b.SHA256,
+		"sh.brew.bottle.platform":              b.Platform.Tag,
 	}).(v1.Image)
 
 	return img, nil

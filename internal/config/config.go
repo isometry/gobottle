@@ -34,7 +34,7 @@ type Config struct {
 
 // SourceConfig defines where to fetch artifacts from
 type SourceConfig struct {
-	// Type: "github" or "local"
+	// Type: "github", "local", or "go"
 	Type string `mapstructure:"type"`
 
 	// GitHub source options
@@ -44,6 +44,36 @@ type SourceConfig struct {
 
 	// Local source options
 	DistPath string `mapstructure:"dist_path"`
+
+	// Go source options (ko-like mode)
+	Build BuildConfig `mapstructure:"build"`
+}
+
+// BuildConfig defines Go build configuration for ko-like mode
+type BuildConfig struct {
+	// Packages to build (e.g., ["./cmd/myapp"])
+	Packages []string `mapstructure:"packages"`
+
+	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})
+	Ldflags string `mapstructure:"ldflags"`
+
+	// Extra environment variables for go build
+	Env map[string]string `mapstructure:"env"`
+
+	// Enable CGO (default: false for portable static binaries)
+	CGOEnabled bool `mapstructure:"cgo_enabled"`
+
+	// Use -trimpath for reproducible builds (default: true)
+	Trimpath bool `mapstructure:"trimpath"`
+
+	// Extra go build flags
+	Flags []string `mapstructure:"flags"`
+
+	// Path to go.mod directory (default: ".")
+	ModDir string `mapstructure:"mod_dir"`
+
+	// Number of parallel builds (default: GOMAXPROCS)
+	Parallel int `mapstructure:"parallel"`
 }
 
 // BottleConfig defines bottle generation settings
@@ -106,6 +136,17 @@ func (c *Config) SetDefaults() {
 	if c.Source.DistPath == "" {
 		c.Source.DistPath = "dist"
 	}
+
+	// Go source defaults
+	if c.Source.Type == "go" {
+		if c.Source.Build.ModDir == "" {
+			c.Source.Build.ModDir = "."
+		}
+		// Trimpath defaults to true for reproducible builds
+		// Note: we can't distinguish between "not set" and "set to false" with bool
+		// So trimpath is enabled unless explicitly disabled via config
+	}
+
 	if c.Bottle.Cellar == "" {
 		c.Bottle.Cellar = ":any_skip_relocation"
 	}
@@ -151,7 +192,7 @@ func (c *Config) SetDefaults() {
 // ValidationError represents a configuration validation error
 type ValidationError struct {
 	Field   string
-	Value   interface{}
+	Value   any
 	Message string
 }
 
@@ -230,16 +271,43 @@ func (c *Config) Validate() error {
 				Message: "version is required when using local source",
 			})
 		}
+	case "go":
+		// Version required for go source
+		if c.Version == "" {
+			errs = append(errs, &ValidationError{
+				Field:   "version",
+				Message: "version is required when using go source",
+			})
+		}
+		// Packages required for go source
+		if len(c.Source.Build.Packages) == 0 {
+			errs = append(errs, &ValidationError{
+				Field:   "source.build.packages",
+				Message: "at least one package is required for go source",
+			})
+		}
+		// Verify mod_dir exists if specified
+		modDir := c.Source.Build.ModDir
+		if modDir == "" {
+			modDir = "."
+		}
+		if _, err := os.Stat(modDir); os.IsNotExist(err) {
+			errs = append(errs, &ValidationError{
+				Field:   "source.build.mod_dir",
+				Value:   modDir,
+				Message: "module directory does not exist",
+			})
+		}
 	case "":
 		errs = append(errs, &ValidationError{
 			Field:   "source.type",
-			Message: "source type is required ('github' or 'local')",
+			Message: "source type is required ('github', 'local', or 'go')",
 		})
 	default:
 		errs = append(errs, &ValidationError{
 			Field:   "source.type",
 			Value:   c.Source.Type,
-			Message: "must be 'github' or 'local'",
+			Message: "must be 'github', 'local', or 'go'",
 		})
 	}
 

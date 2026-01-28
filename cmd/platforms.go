@@ -56,9 +56,9 @@ func runPlatforms(cmd *cobra.Command, rootOpts *Options, opts *PlatformsOptions)
 	if opts.JSON {
 		output := struct {
 			MacOS []struct {
-				Symbol     string   `json:"symbol"`
-				Version    int      `json:"version"`
-				Tags       []string `json:"tags"`
+				Symbol  string   `json:"symbol"`
+				Version int      `json:"version"`
+				Tags    []string `json:"tags"`
 			} `json:"macos"`
 			Linux struct {
 				Architectures []string `json:"architectures"`
@@ -66,9 +66,9 @@ func runPlatforms(cmd *cobra.Command, rootOpts *Options, opts *PlatformsOptions)
 			} `json:"linux"`
 		}{
 			MacOS: make([]struct {
-				Symbol     string   `json:"symbol"`
-				Version    int      `json:"version"`
-				Tags       []string `json:"tags"`
+				Symbol  string   `json:"symbol"`
+				Version int      `json:"version"`
+				Tags    []string `json:"tags"`
 			}, len(info.MacOSVersions)),
 			Linux: struct {
 				Architectures []string `json:"architectures"`
