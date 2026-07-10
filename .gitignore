@@ -7,7 +7,7 @@
 /homebrew-test/
 
 # Local assistant/tooling state
-/.claude/
+.claude/settings.local.json
 
 # Editor/OS noise
 .DS_Store
