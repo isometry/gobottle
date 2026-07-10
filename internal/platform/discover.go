@@ -165,14 +165,13 @@ func parseVersionRb(content string) (*PlatformInfo, error) {
 	}, nil
 }
 
-// DefaultPlatformInfo returns a fallback platform info if discovery fails
+// DefaultPlatformInfo returns a fallback platform info if discovery fails.
+// Only includes macOS versions currently supported by Apple/Homebrew (past 3 releases).
 func DefaultPlatformInfo() *PlatformInfo {
 	return &PlatformInfo{
 		MacOSVersions: []MacOSVersion{
 			{Major: 15, Symbol: "sequoia"},
 			{Major: 14, Symbol: "sonoma"},
-			{Major: 13, Symbol: "ventura"},
-			{Major: 12, Symbol: "monterey"},
 		},
 		LinuxArches: []string{"x86_64", "aarch64"},
 	}

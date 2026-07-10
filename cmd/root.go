@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -47,7 +48,9 @@ and updating your Homebrew tap formula with the bottle block.`,
 	_ = viper.BindPFlag("dry_run", cmd.PersistentFlags().Lookup("dry-run"))
 
 	// Add subcommands
-	cmd.AddCommand(NewBottleCommand(opts))
+	cmd.AddCommand(NewBuildCommand(opts))
+	cmd.AddCommand(NewPushCommand(opts))
+	cmd.AddCommand(NewReleaseCommand(opts))
 	cmd.AddCommand(NewPlatformsCommand(opts))
 	cmd.AddCommand(NewVersionCommand())
 	cmd.AddCommand(NewCompletionCommand())
@@ -79,9 +82,13 @@ func initConfig(opts *Options) error {
 		viper.SetConfigName(".gobottle")
 	}
 
-	// Read in environment variables that match
+	// Read in environment variables that match: GOBOTTLE_REGISTRY_TOKEN ->
+	// registry.token, etc. GOBOTTLE_REPO is a ko-style shorthand for the
+	// registry root path.
 	viper.SetEnvPrefix("GOBOTTLE")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
+	_ = viper.BindEnv("registry.root_path", "GOBOTTLE_REPO", "GOBOTTLE_REGISTRY_ROOT_PATH")
 
 	// Also check for GITHUB_TOKEN
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {

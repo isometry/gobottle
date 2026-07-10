@@ -21,6 +21,7 @@ type Tab struct {
 	Time                  int64               `json:"time"`
 	SourceModifiedTime    int64               `json:"source_modified_time"`
 	Compiler              string              `json:"compiler"`
+	Stdlib                *string             `json:"stdlib"`
 	Aliases               []string            `json:"aliases"`
 	RuntimeDependencies   []RuntimeDependency `json:"runtime_dependencies"`
 	Source                TabSource           `json:"source"`
@@ -48,9 +49,9 @@ type TabSource struct {
 
 // TabVersions contains version information
 type TabVersions struct {
-	Stable        string `json:"stable"`
-	Head          string `json:"head"`
-	VersionScheme int    `json:"version_scheme"`
+	Stable        string  `json:"stable"`
+	Head          *string `json:"head"`
+	VersionScheme int     `json:"version_scheme"`
 }
 
 // TabBuiltOn contains build environment information
@@ -85,6 +86,11 @@ type TabOptions struct {
 
 	// Compiler used (default: "go" for Go-built bottles)
 	Compiler string
+
+	// Time overrides the build timestamp (for reproducible bottles).
+	// Falls back to SOURCE_DATE_EPOCH, then the Unix epoch — never
+	// time.Now(), so identical inputs marshal identically.
+	Time time.Time
 }
 
 // NewTab creates a new Tab with the given options
@@ -94,11 +100,11 @@ func NewTab(opts TabOptions) *Tab {
 		opts.Compiler = "go"
 	}
 
-	// Get build time
-	buildTime := time.Now().Unix()
-
-	// Respect SOURCE_DATE_EPOCH for reproducibility
-	if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
+	// Build time: explicit option > SOURCE_DATE_EPOCH > Unix epoch.
+	var buildTime int64
+	if !opts.Time.IsZero() {
+		buildTime = opts.Time.Unix()
+	} else if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
 		if secs, err := strconv.ParseInt(epoch, 10, 64); err == nil {
 			buildTime = secs
 		}
@@ -138,7 +144,6 @@ func NewTab(opts TabOptions) *Tab {
 			Spec: "stable",
 			Versions: TabVersions{
 				Stable:        opts.Version,
-				Head:          "",
 				VersionScheme: 0,
 			},
 			Tap: opts.Tap,
@@ -152,7 +157,9 @@ func NewTab(opts TabOptions) *Tab {
 	}
 }
 
-// Marshal returns the JSON representation of the Tab
+// Marshal returns the compact JSON representation of the Tab, used both for
+// the INSTALL_RECEIPT.json inside the bottle and the sh.brew.tab manifest
+// annotation.
 func (t *Tab) Marshal() ([]byte, error) {
-	return json.MarshalIndent(t, "", "  ")
+	return json.Marshal(t)
 }

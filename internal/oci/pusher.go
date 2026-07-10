@@ -1,323 +1,314 @@
+// Package oci publishes Homebrew bottles to an OCI registry using the exact
+// conventions brew expects when pouring from GHCR (Homebrew's
+// github_packages.rb is the reference implementation):
+//
+//   - image path:   <host>/<root path>/<formula> — the formula name is the
+//     last path element because brew appends it to the formula's root_url
+//   - one OCI *index* per version, tagged "version[-rebuild]" (brew always
+//     parses the manifest response as an index, even for a single platform)
+//   - index children carry sh.brew.bottle.digest, sh.brew.tab and
+//     org.opencontainers.image.ref.name="version.tag[.rebuild]" annotations —
+//     all three are read by brew at install time
+//   - the layer blob is the bottle tar.gz byte-for-byte, so its digest equals
+//     the sha256 in the formula's bottle block
 package oci
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"path/filepath"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
-	"github.com/google/go-containerregistry/pkg/v1/tarball"
+	"github.com/google/go-containerregistry/pkg/v1/remote/transport"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/isometry/gobottle/internal/bottle"
 )
 
-const (
-	// MediaTypes as required by Homebrew/OCI spec
-	ConfigMediaType = types.OCIConfigJSON // "application/vnd.oci.image.config.v1+json"
-	LayerMediaType  = types.OCILayer      // "application/vnd.oci.image.layer.v1.tar+gzip"
-)
-
-// Pusher pushes bottles to an OCI registry
-type Pusher struct {
-	auth     *Authenticator
-	registry string // e.g., "ghcr.io"
-	owner    string // e.g., "myorg"
-	pkg      string // package name
+// PublishOptions holds metadata rendered into OCI annotations.
+type PublishOptions struct {
+	SourceURL   string    // org.opencontainers.image.source (links the GHCR package to a repo)
+	Homepage    string    // org.opencontainers.image.url
+	License     string    // org.opencontainers.image.licenses + sh.brew.license
+	Description string    // org.opencontainers.image.description
+	Created     time.Time // org.opencontainers.image.created; zero omits it (keeps pushes deterministic)
 }
 
-// NewPusher creates a new OCI pusher
-func NewPusher(host, owner, pkg, token string) (*Pusher, error) {
-	if host == "" {
-		return nil, fmt.Errorf("host cannot be empty")
-	}
-	if owner == "" {
-		return nil, fmt.Errorf("owner cannot be empty")
-	}
-	if pkg == "" {
-		return nil, fmt.Errorf("package name cannot be empty")
+// Publisher pushes bottles for a single formula to an OCI registry.
+type Publisher struct {
+	repo name.Repository
+	auth *Authenticator
+	opts PublishOptions
+}
+
+// Result describes one pushed (or to-be-pushed) index.
+type Result struct {
+	Tag     string // e.g. "1.2.3" or "1.2.3-1"
+	Ref     string // full tagged reference
+	Digest  string // index digest (empty on dry runs)
+	Bottles []*bottle.Bottle
+}
+
+// ImageFormulaName sanitizes a formula name for use as an OCI path element,
+// mirroring GitHubPackages.image_formula_name: "@" -> "/", "+" -> "x".
+func ImageFormulaName(formula string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(formula, "@", "/"), "+", "x")
+}
+
+// NewPublisher creates a publisher for <host>/<rootPath>/<formula>.
+// rootPath is everything between the registry host and the formula name
+// (e.g. "myorg/tap"); brew's root_url is then "https://<host>/v2/<rootPath>".
+func NewPublisher(host, rootPath, formula, token string, opts PublishOptions) (*Publisher, error) {
+	if host == "" || rootPath == "" || formula == "" {
+		return nil, fmt.Errorf("registry host, root path and formula are all required")
 	}
 	if token == "" {
-		return nil, fmt.Errorf("token cannot be empty")
+		return nil, fmt.Errorf("registry token is required")
 	}
 
-	return &Pusher{
-		auth:     NewAuthenticator(host, token),
-		registry: host,
-		owner:    owner,
-		pkg:      pkg,
+	repoPath := strings.ToLower(fmt.Sprintf("%s/%s/%s", host, rootPath, ImageFormulaName(formula)))
+	repo, err := name.NewRepository(repoPath)
+	if err != nil {
+		return nil, fmt.Errorf("invalid repository %s: %w", repoPath, err)
+	}
+
+	return &Publisher{
+		repo: repo,
+		auth: NewAuthenticator(repo.RegistryStr(), token),
+		opts: opts,
 	}, nil
 }
 
-// Push pushes a bottle to the registry
-// Returns the full image reference (e.g., ghcr.io/myorg/myapp:1.0.0)
-func (p *Pusher) Push(ctx context.Context, b *bottle.Bottle) (string, error) {
-	// Build the image reference
-	ref := p.GetFullReference(b)
-
-	// Parse the reference
-	imageRef, err := name.ParseReference(ref)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse reference %s: %w", ref, err)
-	}
-
-	// Create OCI image from bottle
-	img, err := p.createImage(b)
-	if err != nil {
-		return "", fmt.Errorf("failed to create OCI image for %s: %w", b.BottleName(), err)
-	}
-
-	// Push the image
-	err = remote.Write(imageRef, img, remote.WithContext(ctx), remote.WithAuthFromKeychain(p.auth.Keychain()))
-	if err != nil {
-		return "", fmt.Errorf("failed to push image %s: %w", ref, err)
-	}
-
-	return ref, nil
+// Repository returns the full image path (host/rootPath/formula).
+func (p *Publisher) Repository() string {
+	return p.repo.Name()
 }
 
-// PushAll pushes multiple bottles and creates an index
-// This is useful when you have bottles for multiple platforms
-func (p *Pusher) PushAll(ctx context.Context, bottles []*bottle.Bottle) error {
+// Push publishes all bottles, one OCI index per version[-rebuild] tag.
+// If an index already exists at the tag, other-platform children are
+// preserved (brew pr-upload's --keep-old behavior) and matching platforms
+// are replaced.
+func (p *Publisher) Push(ctx context.Context, bottles []*bottle.Bottle, log func(string)) ([]Result, error) {
 	if len(bottles) == 0 {
-		return fmt.Errorf("no bottles to push")
+		return nil, fmt.Errorf("no bottles to push")
+	}
+	if log == nil {
+		log = func(string) {}
 	}
 
-	// Group bottles by version to create multi-platform manifests
-	versionGroups := make(map[string][]*bottle.Bottle)
+	groups := map[string][]*bottle.Bottle{}
+	var tags []string
 	for _, b := range bottles {
-		versionGroups[b.Version] = append(versionGroups[b.Version], b)
-	}
-
-	// Push each version group
-	for version, groupBottles := range versionGroups {
-		if len(groupBottles) == 1 {
-			// Single platform - just push the image
-			ref, err := p.Push(ctx, groupBottles[0])
-			if err != nil {
-				return err
-			}
-			fmt.Printf("Pushed %s\n", ref)
-		} else {
-			// Multiple platforms - create an index
-			err := p.pushIndex(ctx, version, groupBottles)
-			if err != nil {
-				return err
-			}
+		tag := b.VersionRebuild()
+		if _, seen := groups[tag]; !seen {
+			tags = append(tags, tag)
 		}
+		groups[tag] = append(groups[tag], b)
 	}
 
-	return nil
+	var results []Result
+	for _, tag := range tags {
+		res, err := p.pushIndex(ctx, tag, groups[tag], log)
+		if err != nil {
+			return results, err
+		}
+		results = append(results, *res)
+	}
+
+	return results, nil
 }
 
-// pushIndex creates and pushes a multi-platform index for bottles of the same version
-func (p *Pusher) pushIndex(ctx context.Context, version string, bottles []*bottle.Bottle) error {
-	// Build the reference for the index
-	ref := fmt.Sprintf("%s/%s/%s:%s", p.registry, p.owner, p.pkg, version)
-	indexRef, err := name.ParseReference(ref)
-	if err != nil {
-		return fmt.Errorf("failed to parse index reference %s: %w", ref, err)
+// pushIndex assembles and pushes the OCI index for one version tag.
+func (p *Publisher) pushIndex(ctx context.Context, tag string, bottles []*bottle.Bottle, log func(string)) (*Result, error) {
+	tagRef := p.repo.Tag(tag)
+	remoteOpts := []remote.Option{
+		remote.WithContext(ctx),
+		remote.WithAuthFromKeychain(p.auth.Keychain()),
 	}
 
-	// Create index
-	adds := make([]mutate.IndexAddendum, 0, len(bottles))
-
-	for _, b := range bottles {
-		// Create image for this bottle
-		img, err := p.createImage(b)
-		if err != nil {
-			return fmt.Errorf("failed to create image for %s: %w", b.BottleName(), err)
+	// Start from the existing index when present so other platforms survive
+	// a partial re-publish; drop children we are about to replace.
+	var idx v1.ImageIndex = mutate.IndexMediaType(empty.Index, types.OCIImageIndex)
+	if existing, err := remote.Index(tagRef, remoteOpts...); err == nil {
+		replaced := map[string]bool{}
+		for _, b := range bottles {
+			replaced[b.RefName()] = true
 		}
+		idx = mutate.RemoveManifests(existing, func(desc v1.Descriptor) bool {
+			return replaced[desc.Annotations["org.opencontainers.image.ref.name"]]
+		})
+		log(fmt.Sprintf("appending to existing index %s", tagRef.String()))
+	}
 
-		// Add to index with platform descriptor
+	adds := make([]mutate.IndexAddendum, 0, len(bottles))
+	for _, b := range bottles {
+		img, annotations, platform, err := p.bottleImage(b)
+		if err != nil {
+			return nil, err
+		}
 		adds = append(adds, mutate.IndexAddendum{
 			Add: img,
 			Descriptor: v1.Descriptor{
-				Platform: p.getPlatform(b),
-				Annotations: map[string]string{
-					"org.opencontainers.image.title": b.BottleName(),
-					"sh.brew.bottle.digest":          b.SHA256,
-				},
+				Platform:    platform,
+				Annotations: annotations,
 			},
 		})
 	}
 
-	// Create the index from scratch
-	idx := mutate.AppendManifests(empty.Index, adds...)
+	idx = mutate.AppendManifests(idx, adds...)
+	idx = mutate.Annotations(idx, p.indexAnnotations(tag, bottles[0])).(v1.ImageIndex)
 
-	// Push the index
-	err = remote.WriteIndex(indexRef, idx, remote.WithContext(ctx), remote.WithAuthFromKeychain(p.auth.Keychain()))
-	if err != nil {
-		return fmt.Errorf("failed to push index %s: %w", ref, err)
+	if err := remote.WriteIndex(tagRef, idx, remoteOpts...); err != nil {
+		return nil, fmt.Errorf("failed to push index %s: %w", tagRef.String(), err)
 	}
 
-	fmt.Printf("Pushed multi-platform index %s (%d platforms)\n", ref, len(bottles))
-	return nil
+	digest, err := idx.Digest()
+	if err != nil {
+		return nil, fmt.Errorf("failed to compute index digest: %w", err)
+	}
+
+	log(fmt.Sprintf("pushed %s (%d platforms)", tagRef.String(), len(bottles)))
+
+	return &Result{
+		Tag:     tag,
+		Ref:     tagRef.String(),
+		Digest:  digest.String(),
+		Bottles: bottles,
+	}, nil
 }
 
-// createImage creates an OCI image from a bottle
-func (p *Pusher) createImage(b *bottle.Bottle) (v1.Image, error) {
-	// Start with an empty image with the correct config media type
-	img := empty.Image
-
-	// Set the config media type to OCI
-	img = mutate.MediaType(img, types.OCIManifestSchema1)
-	img = mutate.ConfigMediaType(img, ConfigMediaType)
-
-	// Load the bottle tarball as a layer
-	layer, err := tarball.LayerFromFile(b.Path, tarball.WithMediaType(LayerMediaType))
+// bottleImage builds the per-platform OCI image: a real config blob
+// (architecture/os/os.version + rootfs diff_ids, as brew publishes) plus the
+// bottle tarball as its single layer.
+func (p *Publisher) bottleImage(b *bottle.Bottle) (v1.Image, map[string]string, *v1.Platform, error) {
+	layer, err := newBottleLayer(b)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create layer from %s: %w", b.Path, err)
+		return nil, nil, nil, err
 	}
 
-	// Add the layer to the image
+	platform := &v1.Platform{
+		OS:           b.Platform.OS,
+		Architecture: ociArch(b.Platform.Arch),
+	}
+	if b.Platform.OS == "darwin" && b.Platform.OSVersionMajor > 0 {
+		platform.OSVersion = fmt.Sprintf("macOS %d", b.Platform.OSVersionMajor)
+	}
+
+	img := mutate.MediaType(empty.Image, types.OCIManifestSchema1)
+	img = mutate.ConfigMediaType(img, types.OCIConfigJSON)
+
+	img, err = mutate.ConfigFile(img, &v1.ConfigFile{
+		Architecture: platform.Architecture,
+		OS:           platform.OS,
+		OSVersion:    platform.OSVersion,
+		RootFS:       v1.RootFS{Type: "layers"},
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to set config for %s: %w", b.BottleName(), err)
+	}
+
 	img, err = mutate.AppendLayers(img, layer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to append layer: %w", err)
+		return nil, nil, nil, fmt.Errorf("failed to append layer for %s: %w", b.BottleName(), err)
 	}
 
-	// Add annotations to the image config
-	img = mutate.Annotations(img, map[string]string{
+	annotations, err := p.bottleAnnotations(b, layer.size)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	img = mutate.Annotations(img, annotations).(v1.Image)
+
+	return img, annotations, platform, nil
+}
+
+// bottleAnnotations builds the annotation set brew reads from the index's
+// child descriptors (and which we mirror onto the image manifests, as brew
+// itself does).
+func (p *Publisher) bottleAnnotations(b *bottle.Bottle, fileSize int64) (map[string]string, error) {
+	tabJSON, err := b.Tab.Marshal()
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tab for %s: %w", b.BottleName(), err)
+	}
+
+	annotations := map[string]string{
+		"org.opencontainers.image.ref.name":    b.RefName(),
 		"org.opencontainers.image.title":       b.BottleName(),
 		"org.opencontainers.image.version":     b.Version,
 		"org.opencontainers.image.description": fmt.Sprintf("Homebrew bottle for %s %s (%s)", b.Formula, b.Version, b.Platform.Tag),
 		"sh.brew.bottle.digest":                b.SHA256,
-		"sh.brew.bottle.platform":              b.Platform.Tag,
-	}).(v1.Image)
-
-	return img, nil
+		"sh.brew.bottle.size":                  strconv.FormatInt(fileSize, 10),
+		"sh.brew.bottle.installed_size":        strconv.FormatInt(b.UncompressedSize, 10),
+		"sh.brew.tab":                          string(tabJSON),
+	}
+	p.addCommonAnnotations(annotations)
+	return annotations, nil
 }
 
-// getPlatform converts a bottle platform to OCI platform descriptor
-func (p *Pusher) getPlatform(b *bottle.Bottle) *v1.Platform {
-	// Map platform OS and arch to OCI platform
-	platform := &v1.Platform{
-		OS:           b.Platform.OS,
-		Architecture: p.mapArchitecture(b.Platform.Arch),
+// indexAnnotations builds the index-level annotation set.
+func (p *Publisher) indexAnnotations(tag string, sample *bottle.Bottle) map[string]string {
+	annotations := map[string]string{
+		"com.github.package.type":              "homebrew_bottle",
+		"org.opencontainers.image.ref.name":    tag,
+		"org.opencontainers.image.title":       fmt.Sprintf("%s bottles", sample.Formula),
+		"org.opencontainers.image.version":     sample.Version,
+		"org.opencontainers.image.description": fmt.Sprintf("Homebrew bottles for %s %s", sample.Formula, sample.Version),
 	}
-
-	// Add OS version for macOS
-	if b.Platform.OS == "darwin" && b.Platform.OSVersion != "" {
-		platform.OSVersion = b.Platform.OSVersion
-	}
-
-	return platform
+	p.addCommonAnnotations(annotations)
+	return annotations
 }
 
-// mapArchitecture maps Go architecture to OCI architecture
-func (p *Pusher) mapArchitecture(arch string) string {
+func (p *Publisher) addCommonAnnotations(annotations map[string]string) {
+	if p.opts.Description != "" {
+		annotations["org.opencontainers.image.description"] = p.opts.Description
+	}
+	if p.opts.SourceURL != "" {
+		annotations["org.opencontainers.image.source"] = p.opts.SourceURL
+	}
+	if p.opts.Homepage != "" {
+		annotations["org.opencontainers.image.url"] = p.opts.Homepage
+	}
+	if p.opts.License != "" {
+		annotations["org.opencontainers.image.licenses"] = p.opts.License
+		annotations["sh.brew.license"] = p.opts.License
+	}
+	if !p.opts.Created.IsZero() {
+		annotations["org.opencontainers.image.created"] = p.opts.Created.UTC().Format(time.RFC3339)
+	}
+}
+
+// ociArch maps Go arch names to OCI architecture values.
+func ociArch(arch string) string {
 	switch arch {
-	case "amd64":
-		return "amd64"
-	case "arm64":
-		return "arm64"
+	case "amd64", "arm64":
+		return arch
 	default:
 		return arch
 	}
 }
 
-// ValidateReference checks if a reference is valid
-func ValidateReference(ref string) error {
-	_, err := name.ParseReference(ref)
-	return err
-}
-
-// GetFullReference returns the full OCI reference for a bottle
-func (p *Pusher) GetFullReference(b *bottle.Bottle) string {
-	return fmt.Sprintf("%s/%s/%s:%s", p.registry, p.owner, p.pkg, b.Version)
-}
-
-// GetDigest retrieves the digest of a pushed image
-func (p *Pusher) GetDigest(ctx context.Context, ref string) (string, error) {
-	imageRef, err := name.ParseReference(ref)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse reference %s: %w", ref, err)
+// AnonymouslyAccessible reports whether the given tag can be fetched without
+// credentials — the way brew pulls (Bearer QQ==). A false result almost
+// always means the GHCR package is still private and must be made public
+// before anyone can `brew install` from it.
+func (p *Publisher) AnonymouslyAccessible(ctx context.Context, tag string) (bool, error) {
+	_, err := remote.Head(p.repo.Tag(tag), remote.WithContext(ctx))
+	if err == nil {
+		return true, nil
 	}
-
-	desc, err := remote.Get(imageRef, remote.WithContext(ctx), remote.WithAuthFromKeychain(p.auth.Keychain()))
-	if err != nil {
-		return "", fmt.Errorf("failed to get descriptor for %s: %w", ref, err)
-	}
-
-	return desc.Digest.String(), nil
-}
-
-// ImageExists checks if an image exists in the registry
-func (p *Pusher) ImageExists(ctx context.Context, ref string) (bool, error) {
-	imageRef, err := name.ParseReference(ref)
-	if err != nil {
-		return false, fmt.Errorf("failed to parse reference %s: %w", ref, err)
-	}
-
-	_, err = remote.Head(imageRef, remote.WithContext(ctx), remote.WithAuthFromKeychain(p.auth.Keychain()))
-	if err != nil {
-		// Check if it's a "not found" error
-		if err.Error() == "MANIFEST_UNKNOWN" {
+	var terr *transport.Error
+	if errors.As(err, &terr) {
+		if terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden ||
+			terr.StatusCode == http.StatusNotFound {
+			// GHCR reports private packages as 401/403/404 to anonymous pulls.
 			return false, nil
 		}
-		return false, err
 	}
-
-	return true, nil
-}
-
-// GetImageAnnotations retrieves annotations from a pushed image
-func (p *Pusher) GetImageAnnotations(ctx context.Context, ref string) (map[string]string, error) {
-	imageRef, err := name.ParseReference(ref)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse reference %s: %w", ref, err)
-	}
-
-	img, err := remote.Image(imageRef, remote.WithContext(ctx), remote.WithAuthFromKeychain(p.auth.Keychain()))
-	if err != nil {
-		return nil, fmt.Errorf("failed to get image %s: %w", ref, err)
-	}
-
-	manifest, err := img.Manifest()
-	if err != nil {
-		return nil, fmt.Errorf("failed to get manifest: %w", err)
-	}
-
-	return manifest.Annotations, nil
-}
-
-// PushWithProgress pushes a bottle with progress reporting
-func (p *Pusher) PushWithProgress(ctx context.Context, b *bottle.Bottle, progressFn func(update string)) (string, error) {
-	if progressFn != nil {
-		progressFn(fmt.Sprintf("Creating OCI image for %s", filepath.Base(b.Path)))
-	}
-
-	// Build the image reference
-	ref := p.GetFullReference(b)
-
-	// Parse the reference
-	imageRef, err := name.ParseReference(ref)
-	if err != nil {
-		return "", fmt.Errorf("failed to parse reference %s: %w", ref, err)
-	}
-
-	// Create OCI image from bottle
-	img, err := p.createImage(b)
-	if err != nil {
-		return "", fmt.Errorf("failed to create OCI image for %s: %w", b.BottleName(), err)
-	}
-
-	if progressFn != nil {
-		progressFn(fmt.Sprintf("Pushing %s to %s", b.BottleName(), ref))
-	}
-
-	// Push the image
-	err = remote.Write(imageRef, img, remote.WithContext(ctx), remote.WithAuthFromKeychain(p.auth.Keychain()))
-	if err != nil {
-		return "", fmt.Errorf("failed to push image %s: %w", ref, err)
-	}
-
-	if progressFn != nil {
-		progressFn(fmt.Sprintf("Successfully pushed %s", ref))
-	}
-
-	return ref, nil
+	return false, err
 }

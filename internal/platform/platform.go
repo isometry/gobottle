@@ -7,10 +7,11 @@ import (
 
 // Platform represents a Homebrew bottle platform tag
 type Platform struct {
-	Tag       string // e.g., "arm64_sonoma", "x86_64_linux"
-	OS        string // "darwin" or "linux"
-	Arch      string // "amd64" or "arm64"
-	OSVersion string // e.g., "sonoma", "ventura" (macOS codename), or empty for Linux
+	Tag            string // e.g., "arm64_sonoma", "x86_64_linux"
+	OS             string // "darwin" or "linux"
+	Arch           string // "amd64" or "arm64"
+	OSVersion      string // e.g., "sonoma", "ventura" (macOS codename), or empty for Linux
+	OSVersionMajor int    // e.g., 14 for sonoma; 0 for Linux
 }
 
 func (p Platform) String() string {
@@ -33,39 +34,41 @@ type PlatformInfo struct {
 	LinuxArches   []string       // e.g., ["x86_64", "aarch64"]
 }
 
-// GetPlatformsForOS returns all Homebrew platform tags for a given OS/arch
+// GetPlatformsForOS returns the Homebrew platform tag for a given OS/arch.
+// For macOS, returns only the oldest supported version (e.g., monterey).
+// Homebrew's fallback mechanism allows older bottles to install on newer macOS.
 func (pi *PlatformInfo) GetPlatformsForOS(goos, goarch string) []Platform {
-	var platforms []Platform
-
 	switch goos {
 	case "darwin":
-		for _, v := range pi.MacOSVersions {
-			var tag string
-			if goarch == "arm64" {
-				tag = "arm64_" + v.Symbol
-			} else {
-				tag = v.Symbol
-			}
-			platforms = append(platforms, Platform{
-				Tag:       tag,
-				OS:        goos,
-				Arch:      goarch,
-				OSVersion: v.Symbol,
-			})
+		if len(pi.MacOSVersions) == 0 {
+			return nil
 		}
-
+		// MacOSVersions is sorted newest-first, so last element is oldest
+		oldest := pi.MacOSVersions[len(pi.MacOSVersions)-1]
+		var tag string
+		if goarch == "arm64" {
+			tag = "arm64_" + oldest.Symbol
+		} else {
+			tag = oldest.Symbol
+		}
+		return []Platform{{
+			Tag:            tag,
+			OS:             goos,
+			Arch:           goarch,
+			OSVersion:      oldest.Symbol,
+			OSVersionMajor: oldest.Major,
+		}}
 	case "linux":
 		archTag := goArchToHomebrewArch(goarch)
 		if archTag != "" {
-			platforms = append(platforms, Platform{
+			return []Platform{{
 				Tag:  archTag + "_linux",
 				OS:   goos,
 				Arch: goarch,
-			})
+			}}
 		}
 	}
-
-	return platforms
+	return nil
 }
 
 // AllPlatforms returns all possible platform tags

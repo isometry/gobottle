@@ -1,0 +1,13 @@
+# Build artifacts
+/gobottle
+/dist/
+/bottles/
+
+# Local test tap checkout
+/homebrew-test/
+
+# Local assistant/tooling state
+/.claude/
+
+# Editor/OS noise
+.DS_Store

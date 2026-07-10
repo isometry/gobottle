@@ -1,0 +1,26 @@
+# gobottle configuration
+# See: https://github.com/isometry/gobottle
+
+formula:
+  name: gobottle
+  description: Build and publish Homebrew bottles for Go projects
+  homepage: https://github.com/isometry/gobottle
+  license: MIT
+  install:
+    completions: true
+  test:
+    command: [version]
+
+source:
+  type: go
+  build:
+    packages: ["."]
+    ldflags: >-
+      -s -w
+      -X github.com/isometry/gobottle/cmd.Version={{.Version}}
+      -X github.com/isometry/gobottle/cmd.Commit={{.Commit}}
+      -X github.com/isometry/gobottle/cmd.Date={{.Date}}
+
+tap:
+  owner: isometry
+  repo: homebrew-test

@@ -25,11 +25,11 @@ func NewInitCommand() *cobra.Command {
 		Long: `Initialize a new .gobottle.yaml configuration file in the current directory.
 
 This command will:
-- Detect existing GoReleaser configuration and extract project details
-- Detect git remote origin for owner/repo defaults
-- Generate a sample configuration file with sensible defaults
+- Detect the git remote origin for owner/repo/formula defaults
+- Detect an existing GoReleaser configuration for binary names
+- Generate a configuration with the formula content section ready to edit
 
-The generated configuration can be customized before running 'gobottle bottle'.`,
+The generated configuration can be customized before running 'gobottle release'.`,
 		Example: `  # Initialize with auto-detection
   gobottle init
 
@@ -45,35 +45,28 @@ The generated configuration can be customized before running 'gobottle bottle'.`
 	return cmd
 }
 
-// gobottleConfig represents the .gobottle.yaml structure
-type gobottleConfig struct {
-	Formula     string `yaml:"formula"`
-	Description string `yaml:"description,omitempty"`
-	Homepage    string `yaml:"homepage,omitempty"`
-	License     string `yaml:"license,omitempty"`
+// initFileConfig mirrors the .gobottle.yaml structure for generation.
+type initFileConfig struct {
+	Formula struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+		Homepage    string `yaml:"homepage,omitempty"`
+		License     string `yaml:"license"`
+		Test        struct {
+			Command []string `yaml:"command"`
+		} `yaml:"test"`
+	} `yaml:"formula"`
 
 	Source struct {
-		Type     string `yaml:"type"`
-		Owner    string `yaml:"owner"`
-		Repo     string `yaml:"repo"`
-		DistPath string `yaml:"dist_path,omitempty"`
+		Type  string `yaml:"type"`
+		Build struct {
+			Packages []string `yaml:"packages"`
+		} `yaml:"build"`
 	} `yaml:"source"`
 
-	Registry struct {
-		Host    string `yaml:"host"`
-		Owner   string `yaml:"owner,omitempty"`
-		Package string `yaml:"package,omitempty"`
-	} `yaml:"registry"`
-
 	Tap struct {
-		Owner  string `yaml:"owner,omitempty"`
-		Repo   string `yaml:"repo"`
-		Branch string `yaml:"branch"`
+		Repo string `yaml:"repo"`
 	} `yaml:"tap"`
-
-	Bottle struct {
-		Cellar string `yaml:"cellar"`
-	} `yaml:"bottle"`
 }
 
 func runInit(opts *InitOptions) error {
@@ -84,29 +77,31 @@ func runInit(opts *InitOptions) error {
 		return fmt.Errorf("configuration file %s already exists (use --force to overwrite)", configPath)
 	}
 
-	cfg := &gobottleConfig{}
+	cfg := &initFileConfig{}
 
-	// Set defaults
-	cfg.Source.Type = "local"
-	cfg.Source.DistPath = "dist"
-	cfg.Registry.Host = "ghcr.io"
+	// Defaults for the flagship go-source mode
+	cfg.Source.Type = "go"
+	cfg.Source.Build.Packages = []string{"."}
 	cfg.Tap.Repo = "homebrew-tap"
-	cfg.Tap.Branch = "main"
-	cfg.Bottle.Cellar = ":any_skip_relocation"
+	cfg.Formula.License = "MIT"
+	cfg.Formula.Test.Command = []string{"--version"}
 
-	// Try to detect values from environment
+	// Detect values from the environment
 	detectGitRemote(cfg)
 	detectGoReleaser(cfg)
 
-	// Generate YAML
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return fmt.Errorf("failed to marshal configuration: %w", err)
 	}
 
-	// Add header comment
 	header := `# gobottle configuration
 # See: https://github.com/isometry/gobottle
+#
+# owner/repo/version are derived from git; registry root path defaults to
+# <owner>/<tap repo minus homebrew- prefix>. The formula section drives the
+# fully generated formula (dependencies, caveats, completions, service,
+# template override, ... are also available).
 
 `
 
@@ -114,18 +109,17 @@ func runInit(opts *InitOptions) error {
 		return fmt.Errorf("failed to write configuration: %w", err)
 	}
 
-	fmt.Printf("Created %s\n", configPath)
-	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Review and edit the configuration as needed")
-	fmt.Println("  2. Set GITHUB_TOKEN environment variable")
-	fmt.Println("  3. Run: gobottle bottle --version <version>")
+	fmt.Fprintf(os.Stderr, "Created %s\n\n", configPath)
+	fmt.Fprintln(os.Stderr, "Next steps:")
+	fmt.Fprintln(os.Stderr, "  1. Edit formula.description (brew audit requires it)")
+	fmt.Fprintln(os.Stderr, "  2. Set GITHUB_TOKEN (write:packages + tap contents:write)")
+	fmt.Fprintln(os.Stderr, "  3. Run: gobottle release --dry-run")
 
 	return nil
 }
 
 // detectGitRemote extracts owner/repo from git remote origin using go-git
-func detectGitRemote(cfg *gobottleConfig) {
+func detectGitRemote(cfg *initFileConfig) {
 	repo, err := git.Open(".")
 	if err != nil {
 		return
@@ -136,20 +130,16 @@ func detectGitRemote(cfg *gobottleConfig) {
 		return
 	}
 
-	if owner != "" {
-		cfg.Source.Owner = owner
+	if repoName != "" && cfg.Formula.Name == "" {
+		cfg.Formula.Name = repoName
 	}
-	if repoName != "" {
-		cfg.Source.Repo = repoName
-		// Use repo name as formula name if not set
-		if cfg.Formula == "" {
-			cfg.Formula = repoName
-		}
+	if owner != "" && repoName != "" {
+		cfg.Formula.Homepage = fmt.Sprintf("https://github.com/%s/%s", owner, repoName)
 	}
 }
 
 // detectGoReleaser extracts project information from GoReleaser config
-func detectGoReleaser(cfg *gobottleConfig) {
+func detectGoReleaser(cfg *initFileConfig) {
 	// Try common GoReleaser config locations
 	paths := []string{
 		".goreleaser.yaml",
@@ -188,24 +178,23 @@ func detectGoReleaser(cfg *gobottleConfig) {
 		return
 	}
 
-	// Extract binary name from builds
+	// Prefer the GoReleaser binary/project name for the formula
 	if len(grConfig.Builds) > 0 {
-		binary := grConfig.Builds[0].Binary
-		if binary != "" && cfg.Formula == "" {
-			cfg.Formula = binary
+		if binary := grConfig.Builds[0].Binary; binary != "" {
+			cfg.Formula.Name = binary
+		}
+		if main := grConfig.Builds[0].Main; main != "" {
+			cfg.Source.Build.Packages = []string{main}
 		}
 	}
-
-	// Use project name if set
-	if grConfig.ProjectName != "" && cfg.Formula == "" {
-		cfg.Formula = grConfig.ProjectName
+	if grConfig.ProjectName != "" && cfg.Formula.Name == "" {
+		cfg.Formula.Name = grConfig.ProjectName
 	}
 
 	// Try to get module path from go.mod for homepage
-	if modPath := getModulePath(); modPath != "" {
-		// Convert module path to homepage URL
-		if strings.HasPrefix(modPath, "github.com/") {
-			cfg.Homepage = "https://" + modPath
+	if cfg.Formula.Homepage == "" {
+		if modPath := getModulePath(); strings.HasPrefix(modPath, "github.com/") {
+			cfg.Formula.Homepage = "https://" + modPath
 		}
 	}
 }

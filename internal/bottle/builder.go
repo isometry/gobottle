@@ -4,15 +4,19 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
+	"time"
 
 	"github.com/isometry/gobottle/internal/platform"
 	"github.com/isometry/gobottle/internal/util"
 )
 
-// Builder transforms GoReleaser artifacts into Homebrew bottles
+// Builder transforms build artifacts into Homebrew bottles
 type Builder struct {
 	workDir string
+	seq     int
 }
 
 // BuildOptions contains the parameters for building a bottle
@@ -20,11 +24,14 @@ type BuildOptions struct {
 	Formula      string
 	Version      string
 	Platform     platform.Platform
-	ArtifactPath string   // Path to GoReleaser archive
+	ArtifactPath string   // Path to archive containing the binaries
 	Binaries     []string // Binary names to include
 	Cellar       string
 	Rebuild      int
 	Tap          string // Tap name for INSTALL_RECEIPT.json (e.g., "user/homebrew-tap")
+	FormulaRb    string // Rendered formula source (sans bottle block) for .brew/<formula>.rb
+	SourceDate   time.Time
+	OutputDir    string // Where to write the bottle (default: builder temp dir, removed on Close)
 }
 
 // NewBuilder creates a new bottle builder with a temp work directory
@@ -39,11 +46,14 @@ func NewBuilder() (*Builder, error) {
 	}, nil
 }
 
-// Build creates a bottle from a GoReleaser artifact
-// The artifact should be the path to a tar.gz containing binaries
+// Build creates a bottle from an artifact archive containing the binaries at
+// its root. The output tarball is fully deterministic for identical inputs.
 func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error) {
-	// Step 1: Extract GoReleaser archive to temp dir
-	extractDir := filepath.Join(b.workDir, "extract")
+	// Isolated staging area per build: extraction from different artifacts
+	// must never collide.
+	b.seq++
+	stageDir := filepath.Join(b.workDir, fmt.Sprintf("build-%d", b.seq))
+	extractDir := filepath.Join(stageDir, "extract")
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create extract directory: %w", err)
 	}
@@ -52,47 +62,42 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		return nil, fmt.Errorf("failed to extract artifact: %w", err)
 	}
 
-	// Step 2: Create Homebrew structure
-	bottleDir := filepath.Join(b.workDir, "bottle")
-	homebrewPrefix := filepath.Join(bottleDir, opts.Formula, opts.Version)
-	binDir := filepath.Join(homebrewPrefix, "bin")
-
-	if err := os.MkdirAll(binDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create bin directory: %w", err)
+	// Resolve the reproducible timestamp: explicit option > SOURCE_DATE_EPOCH > epoch.
+	sourceDate := opts.SourceDate
+	if sourceDate.IsZero() {
+		if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
+			if secs, err := strconv.ParseInt(epoch, 10, 64); err == nil {
+				sourceDate = time.Unix(secs, 0)
+			}
+		}
 	}
 
-	// Copy binaries to the bottle structure
+	// Map of archive path -> local path, all rooted at <formula>/<version>/.
+	keg := path.Join(opts.Formula, opts.Version)
 	files := make(map[string]string)
+
 	for _, binary := range opts.Binaries {
 		srcPath := filepath.Join(extractDir, binary)
-
-		// Check if the binary exists
 		if _, err := os.Stat(srcPath); err != nil {
 			return nil, fmt.Errorf("binary %s not found in artifact: %w", binary, err)
 		}
-
-		// Archive path in the bottle
-		archivePath := filepath.Join(opts.Formula, opts.Version, "bin", binary)
-		files[archivePath] = srcPath
+		files[path.Join(keg, "bin", binary)] = srcPath
 	}
 
-	// Step 3: Create .brew/formula.rb stub file
-	brewDir := filepath.Join(homebrewPrefix, ".brew")
+	// .brew/<formula>.rb: the real formula source (without bottle block) so
+	// Formulary can load the installed keg when the tap is unavailable.
+	brewDir := filepath.Join(stageDir, ".brew")
 	if err := os.MkdirAll(brewDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create .brew directory: %w", err)
 	}
 
-	stubPath := filepath.Join(brewDir, opts.Formula+".rb")
-	stubContent := fmt.Sprintf("# Homebrew formula stub for %s\n", opts.Formula)
-	if err := os.WriteFile(stubPath, []byte(stubContent), 0644); err != nil {
-		return nil, fmt.Errorf("failed to create formula stub: %w", err)
+	formulaPath := filepath.Join(brewDir, opts.Formula+".rb")
+	if err := os.WriteFile(formulaPath, []byte(opts.FormulaRb), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write formula: %w", err)
 	}
+	files[path.Join(keg, ".brew", opts.Formula+".rb")] = formulaPath
 
-	// Add the stub to the files map
-	stubArchivePath := filepath.Join(opts.Formula, opts.Version, ".brew", opts.Formula+".rb")
-	files[stubArchivePath] = stubPath
-
-	// Step 3b: Create INSTALL_RECEIPT.json
+	// .brew/INSTALL_RECEIPT.json (the "tab")
 	tab := NewTab(TabOptions{
 		Formula:   opts.Formula,
 		Version:   opts.Version,
@@ -101,6 +106,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		OSVersion: opts.Platform.OSVersion,
 		Tap:       opts.Tap,
 		Compiler:  "go",
+		Time:      sourceDate,
 	})
 
 	receiptContent, err := tab.Marshal()
@@ -112,38 +118,36 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	if err := os.WriteFile(receiptPath, receiptContent, 0644); err != nil {
 		return nil, fmt.Errorf("failed to create INSTALL_RECEIPT.json: %w", err)
 	}
+	files[path.Join(keg, ".brew", "INSTALL_RECEIPT.json")] = receiptPath
 
-	// Add the receipt to the files map
-	receiptArchivePath := filepath.Join(opts.Formula, opts.Version, ".brew", "INSTALL_RECEIPT.json")
-	files[receiptArchivePath] = receiptPath
+	// Write the deterministic bottle tarball.
+	outDir := opts.OutputDir
+	if outDir == "" {
+		outDir = b.workDir
+	} else if err := os.MkdirAll(outDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create output directory: %w", err)
+	}
+	bottleName := bottleFilename(opts.Formula, opts.Version, opts.Platform.Tag, opts.Rebuild)
+	bottlePath := filepath.Join(outDir, bottleName)
 
-	// Step 4: Create bottle tarball with proper naming
-	bottleName := fmt.Sprintf("%s--%s.%s.bottle.tar.gz", opts.Formula, opts.Version, opts.Platform.Tag)
-	bottlePath := filepath.Join(b.workDir, bottleName)
-
-	if err := util.CreateTarGz(bottlePath, files); err != nil {
+	res, err := writeTarGz(bottlePath, files, sourceDate)
+	if err != nil {
 		return nil, fmt.Errorf("failed to create bottle tarball: %w", err)
 	}
 
-	// Step 5: Compute SHA256
-	sha256sum, err := util.ComputeSHA256(bottlePath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to compute SHA256: %w", err)
-	}
-
-	// Create and return the Bottle struct
-	bottle := &Bottle{
-		Formula:  opts.Formula,
-		Version:  opts.Version,
-		Platform: opts.Platform,
-		SHA256:   sha256sum,
-		Path:     bottlePath,
-		Binaries: opts.Binaries,
-		Cellar:   opts.Cellar,
-		Rebuild:  opts.Rebuild,
-	}
-
-	return bottle, nil
+	return &Bottle{
+		Formula:            opts.Formula,
+		Version:            opts.Version,
+		Platform:           opts.Platform,
+		SHA256:             res.SHA256,
+		UncompressedSHA256: res.UncompressedSHA256,
+		UncompressedSize:   res.UncompressedSize,
+		Path:               bottlePath,
+		Binaries:           opts.Binaries,
+		Cellar:             opts.Cellar,
+		Rebuild:            opts.Rebuild,
+		Tab:                tab,
+	}, nil
 }
 
 // Close cleans up the work directory

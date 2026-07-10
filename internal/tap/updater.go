@@ -41,52 +41,81 @@ func NewUpdater(token, owner, repo, branch string) *Updater {
 	}
 }
 
-// UpdateFormula updates or creates a formula in the tap
-// formulaName should be just the formula name (e.g., "myapp"), not the full path
-// content is the complete formula content
-// message is the commit message
-func (u *Updater) UpdateFormula(ctx context.Context, formulaName string, content []byte, message string) error {
-	path := fmt.Sprintf("Formula/%s.rb", formulaName)
+// UpdateFormula creates or updates a formula file in the tap and returns the
+// commit SHA. path is the file path within the repository (e.g.
+// "Formula/myapp.rb"); content is the complete formula; message is the
+// commit message.
+func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte, message string) (string, error) {
 
-	// Get the current file to check if it exists and get its SHA
-	currentFile, _, resp, err := u.client.Repositories.GetContents(ctx, u.owner, u.repo, path, &github.RepositoryContentGetOptions{
-		Ref: u.branch,
-	})
+	// Check if the target branch exists
+	branchExists, err := u.BranchExists(ctx)
+	if err != nil {
+		return "", err
+	}
 
 	var sha *string
-	if err != nil {
-		// If 404, file doesn't exist (this is fine, we'll create it)
-		if resp != nil && resp.StatusCode == 404 {
+	var branchPtr *string
+
+	if !branchExists {
+		// Branch doesn't exist - check if repo is empty
+		isEmpty, err := u.IsRepoEmpty(ctx)
+		if err != nil {
+			return "", err
+		}
+
+		if isEmpty {
+			// Empty repo: create file without specifying branch
+			// GitHub will create the initial commit on the default branch
+			branchPtr = nil
 			sha = nil
 		} else {
-			return fmt.Errorf("failed to check if formula exists: %w", err)
+			// Non-empty repo but branch doesn't exist
+			return "", fmt.Errorf("branch %q does not exist in %s/%s\n"+
+				"  Hint: create the branch first, or use --tap-branch to specify an existing branch",
+				u.branch, u.owner, u.repo)
 		}
 	} else {
-		// File exists, we need the SHA to update it
-		sha = currentFile.SHA
+		// Branch exists - check if file exists to get its SHA
+		branchPtr = github.String(u.branch)
+		currentFile, _, resp, err := u.client.Repositories.GetContents(ctx, u.owner, u.repo, path, &github.RepositoryContentGetOptions{
+			Ref: u.branch,
+		})
+		if err != nil {
+			// If 404, file doesn't exist (this is fine, we'll create it)
+			if resp != nil && resp.StatusCode == 404 {
+				sha = nil
+			} else {
+				return "", fmt.Errorf("failed to check if formula exists: %w", err)
+			}
+		} else {
+			// File exists, we need the SHA to update it
+			sha = currentFile.SHA
+		}
 	}
 
 	// Create or update the file
 	opts := &github.RepositoryContentFileOptions{
 		Message: github.String(message),
 		Content: content,
-		Branch:  github.String(u.branch),
+		Branch:  branchPtr,
 		SHA:     sha,
 	}
 
-	_, _, err = u.client.Repositories.CreateFile(ctx, u.owner, u.repo, path, opts)
+	resp, _, err := u.client.Repositories.CreateFile(ctx, u.owner, u.repo, path, opts)
 	if err != nil {
-		return fmt.Errorf("failed to update formula: %w", err)
+		return "", fmt.Errorf("failed to update formula: %w", err)
 	}
 
-	return nil
+	commitSHA := ""
+	if resp != nil && resp.Commit.SHA != nil {
+		commitSHA = *resp.Commit.SHA
+	}
+	return commitSHA, nil
 }
 
-// GetFormula fetches the current formula content
-// Returns the file content or an error if the file doesn't exist
-func (u *Updater) GetFormula(ctx context.Context, formulaName string) ([]byte, error) {
-	path := fmt.Sprintf("Formula/%s.rb", formulaName)
-
+// GetFormula fetches the current formula content at the given repo path.
+// Returns the file content or an error if the file doesn't exist.
+func (u *Updater) GetFormula(ctx context.Context, path string) ([]byte, error) {
 	fileContent, _, _, err := u.client.Repositories.GetContents(ctx, u.owner, u.repo, path, &github.RepositoryContentGetOptions{
 		Ref: u.branch,
 	})
@@ -103,9 +132,9 @@ func (u *Updater) GetFormula(ctx context.Context, formulaName string) ([]byte, e
 	return []byte(content), nil
 }
 
-// FormulaExists checks if a formula exists in the tap
-func (u *Updater) FormulaExists(ctx context.Context, formulaName string) (bool, error) {
-	_, err := u.GetFormula(ctx, formulaName)
+// FormulaExists checks if a formula exists in the tap at the given repo path
+func (u *Updater) FormulaExists(ctx context.Context, path string) (bool, error) {
+	_, err := u.GetFormula(ctx, path)
 	if err != nil {
 		// Check if it's a 404 error (not found)
 		if errResp, ok := err.(*github.ErrorResponse); ok {
@@ -116,4 +145,33 @@ func (u *Updater) FormulaExists(ctx context.Context, formulaName string) (bool, 
 		return false, err
 	}
 	return true, nil
+}
+
+// BranchExists checks if the specified branch exists in the repository
+func (u *Updater) BranchExists(ctx context.Context) (bool, error) {
+	_, _, err := u.client.Repositories.GetBranch(ctx, u.owner, u.repo, u.branch, 0)
+	if err != nil {
+		if errResp, ok := err.(*github.ErrorResponse); ok {
+			if errResp.Response.StatusCode == 404 {
+				return false, nil
+			}
+		}
+		return false, fmt.Errorf("failed to check branch: %w", err)
+	}
+	return true, nil
+}
+
+// IsRepoEmpty checks if the repository has any commits
+func (u *Updater) IsRepoEmpty(ctx context.Context) (bool, error) {
+	_, resp, err := u.client.Repositories.ListCommits(ctx, u.owner, u.repo, &github.CommitsListOptions{
+		ListOptions: github.ListOptions{PerPage: 1},
+	})
+	if err != nil {
+		// 409 Conflict means empty repository
+		if resp != nil && resp.StatusCode == 409 {
+			return true, nil
+		}
+		return false, fmt.Errorf("failed to check repository status: %w", err)
+	}
+	return false, nil
 }

@@ -63,16 +63,16 @@ func TestSetDefaults(t *testing.T) {
 			expected: "Tap.Branch should be 'main'",
 		},
 		{
-			name:  "package defaults to formula name",
-			input: &Config{Formula: "myformula"},
+			name:  "root path derived from owner and tap repo",
+			input: &Config{Formula: FormulaConfig{Name: "myformula"}, Registry: RegistryConfig{Owner: "myorg"}},
 			check: func(c *Config) bool {
-				return c.Registry.Package == "myformula"
+				return c.Registry.RootPath == "myorg/tap"
 			},
-			expected: "Registry.Package should default to formula name",
+			expected: "Registry.RootPath should derive from owner + tap repo minus homebrew- prefix",
 		},
 		{
 			name:  "binary defaults to formula name",
-			input: &Config{Formula: "myformula"},
+			input: &Config{Formula: FormulaConfig{Name: "myformula"}},
 			check: func(c *Config) bool {
 				return len(c.Binaries) == 1 && c.Binaries[0].Name == "myformula"
 			},
@@ -140,7 +140,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid local config",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type:     "local",
@@ -160,7 +160,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "valid github config",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Source: SourceConfig{
 					Type:  "github",
 					Owner: "myorg",
@@ -196,12 +196,12 @@ func TestValidate(t *testing.T) {
 				Binaries: []BinaryConfig{{Name: "mybin"}},
 			},
 			expectError: true,
-			errorField:  "formula",
+			errorField:  "formula.name",
 		},
 		{
 			name: "missing owner for github source",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Source: SourceConfig{
 					Type: "github",
 					Repo: "myrepo",
@@ -222,7 +222,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing tag for github source",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Source: SourceConfig{
 					Type:  "github",
 					Owner: "myorg",
@@ -243,7 +243,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing version for local source",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Source: SourceConfig{
 					Type:     "local",
 					DistPath: tmpDir,
@@ -263,7 +263,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "invalid source type",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type: "invalid",
@@ -283,7 +283,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "missing registry owner",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type:     "local",
@@ -298,12 +298,12 @@ func TestValidate(t *testing.T) {
 				Binaries: []BinaryConfig{{Name: "mybin"}},
 			},
 			expectError: true,
-			errorField:  "registry.owner",
+			errorField:  "registry.root_path",
 		},
 		{
 			name: "missing token",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type:     "local",
@@ -323,7 +323,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "token from GITHUB_TOKEN env",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type:     "local",
@@ -343,7 +343,7 @@ func TestValidate(t *testing.T) {
 		{
 			name: "token from GH_TOKEN env",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type:     "local",
@@ -361,30 +361,9 @@ func TestValidate(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "missing binaries",
-			config: &Config{
-				Formula: "myformula",
-				Version: "1.0.0",
-				Source: SourceConfig{
-					Type:     "local",
-					DistPath: tmpDir,
-				},
-				Registry: RegistryConfig{
-					Owner: "myorg",
-					Token: "token",
-				},
-				Tap: TapConfig{
-					Owner: "myorg",
-				},
-				Binaries: []BinaryConfig{},
-			},
-			expectError: true,
-			errorField:  "binaries",
-		},
-		{
 			name: "dist path does not exist",
 			config: &Config{
-				Formula: "myformula",
+				Formula: FormulaConfig{Name: "myformula"},
 				Version: "1.0.0",
 				Source: SourceConfig{
 					Type:     "local",
@@ -416,6 +395,9 @@ func TestValidate(t *testing.T) {
 				defer func(key string) { _ = os.Unsetenv(key) }(k)
 			}
 
+			// Validate() runs after SetDefaults() in real usage (root path
+			// derivation happens there).
+			tt.config.SetDefaults()
 			err := tt.config.Validate()
 
 			if tt.expectError {

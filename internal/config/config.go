@@ -3,18 +3,20 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/isometry/gobottle/internal/git"
 )
 
-// Config represents the complete gobottle configuration
+// Config represents the complete gobottle configuration.
+// Precedence (highest first): CLI flag > GOBOTTLE_* env > config file >
+// git-derived defaults > built-in defaults.
 type Config struct {
-	// Project identification
-	Formula     string `mapstructure:"formula"`
-	Version     string `mapstructure:"version"`
-	Description string `mapstructure:"description"`
-	Homepage    string `mapstructure:"homepage"`
-	License     string `mapstructure:"license"`
+	// Formula content (gobottle owns the generated formula outright)
+	Formula FormulaConfig `mapstructure:"formula"`
+
+	// Version being bottled (no "v" prefix; normalized in SetDefaults)
+	Version string `mapstructure:"version"`
 
 	// Source configuration
 	Source SourceConfig `mapstructure:"source"`
@@ -32,6 +34,69 @@ type Config struct {
 	Binaries []BinaryConfig `mapstructure:"binaries"`
 }
 
+// FormulaConfig drives formula generation: every overrideable aspect of the
+// rendered formula lives here. A bare string in YAML ("formula: mytool") is
+// accepted as shorthand for {name: mytool}.
+type FormulaConfig struct {
+	// Name of the formula (default: repo name)
+	Name string `mapstructure:"name"`
+
+	// Description for the desc stanza (brew audit requires one; warned if empty)
+	Description string `mapstructure:"description"`
+
+	// Homepage URL (default: https://github.com/<owner>/<repo>)
+	Homepage string `mapstructure:"homepage"`
+
+	// License as an SPDX identifier; omitted from the formula if empty
+	License string `mapstructure:"license"`
+
+	// Head emits a `head "<repo>.git", branch: "<branch>"` stanza
+	Head bool `mapstructure:"head"`
+
+	// HeadBranch overrides the head branch (default: "main")
+	HeadBranch string `mapstructure:"head_branch"`
+
+	// Dependencies become depends_on lines
+	Dependencies []string `mapstructure:"dependencies"`
+
+	// Conflicts become conflicts_with lines
+	Conflicts []string `mapstructure:"conflicts"`
+
+	// Caveats is emitted verbatim in a caveats heredoc
+	Caveats string `mapstructure:"caveats"`
+
+	// Install customizes the install block beyond bin.install
+	Install InstallConfig `mapstructure:"install"`
+
+	// Test customizes the test block
+	Test TestConfig `mapstructure:"test"`
+
+	// Service is a verbatim `service do` block body
+	Service string `mapstructure:"service"`
+
+	// Template is a path to a Go template overriding the built-in formula
+	// template; it receives the full formula model.
+	Template string `mapstructure:"template"`
+}
+
+// InstallConfig customizes the generated install block.
+type InstallConfig struct {
+	// Completions emits generate_completions_from_executable for each binary
+	Completions bool `mapstructure:"completions"`
+
+	// Extra lines are appended verbatim to the install block
+	Extra []string `mapstructure:"extra"`
+}
+
+// TestConfig customizes the generated test block.
+type TestConfig struct {
+	// Command arguments for `system bin/"<binary>", ...` (default: ["--version"])
+	Command []string `mapstructure:"command"`
+
+	// Raw replaces the whole test body verbatim
+	Raw string `mapstructure:"raw"`
+}
+
 // SourceConfig defines where to fetch artifacts from
 type SourceConfig struct {
 	// Type: "github", "local", or "go"
@@ -47,6 +112,10 @@ type SourceConfig struct {
 
 	// Go source options (ko-like mode)
 	Build BuildConfig `mapstructure:"build"`
+
+	// Source tarball options (for formula generation)
+	URL    string `mapstructure:"url"`    // Source tarball URL (auto-derived if empty)
+	SHA256 string `mapstructure:"sha256"` // Source tarball SHA256 (computed if empty)
 }
 
 // BuildConfig defines Go build configuration for ko-like mode
@@ -57,8 +126,9 @@ type BuildConfig struct {
 	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})
 	Ldflags string `mapstructure:"ldflags"`
 
-	// Extra environment variables for go build
-	Env map[string]string `mapstructure:"env"`
+	// Extra environment variables for go build, as KEY=value strings.
+	// (A YAML map would lose case: viper lowercases map keys.)
+	Env []string `mapstructure:"env"`
 
 	// Enable CGO (default: false for portable static binaries)
 	CGOEnabled bool `mapstructure:"cgo_enabled"`
@@ -97,9 +167,15 @@ type BottleConfig struct {
 // RegistryConfig defines OCI registry settings
 type RegistryConfig struct {
 	// GHCR configuration
-	Host    string `mapstructure:"host"`
-	Owner   string `mapstructure:"owner"`
-	Package string `mapstructure:"package"`
+	Host  string `mapstructure:"host"`
+	Owner string `mapstructure:"owner"`
+
+	// RootPath is the image path between host and formula name
+	// (default: "<owner>/<tap repo minus homebrew- prefix>", mirroring
+	// homebrew-core's ghcr.io/homebrew/core/<formula> layout). The formula's
+	// root_url becomes "https://<host>/v2/<root_path>"; brew appends the
+	// formula name itself. Env: GOBOTTLE_REPO or GOBOTTLE_REGISTRY_ROOT_PATH.
+	RootPath string `mapstructure:"root_path"`
 
 	// Authentication token
 	Token string `mapstructure:"token"`
@@ -122,7 +198,8 @@ type TapConfig struct {
 	Token string `mapstructure:"token"`
 }
 
-// BinaryConfig defines a binary to include in bottles
+// BinaryConfig defines a binary to include in bottles. A bare string in YAML
+// is accepted as shorthand for {name: ...}.
 type BinaryConfig struct {
 	Name        string `mapstructure:"name"`
 	InstallPath string `mapstructure:"install_path"`
@@ -142,9 +219,6 @@ func (c *Config) SetDefaults() {
 		if c.Source.Build.ModDir == "" {
 			c.Source.Build.ModDir = "."
 		}
-		// Trimpath defaults to true for reproducible builds
-		// Note: we can't distinguish between "not set" and "set to false" with bool
-		// So trimpath is enabled unless explicitly disabled via config
 	}
 
 	if c.Bottle.Cellar == "" {
@@ -166,14 +240,34 @@ func (c *Config) SetDefaults() {
 		c.Tap.CommitMessage = "Update {{ .Formula }} to {{ .Version }}"
 	}
 
-	// Default package name to formula name
-	if c.Registry.Package == "" && c.Formula != "" {
-		c.Registry.Package = c.Formula
+	// Normalize version: Homebrew versions have no "v" prefix.
+	c.Version = strings.TrimPrefix(c.Version, "v")
+
+	// Cascade the source owner to registry and tap owners.
+	if c.Registry.Owner == "" {
+		c.Registry.Owner = c.Source.Owner
+	}
+	if c.Tap.Owner == "" {
+		c.Tap.Owner = c.Source.Owner
+	}
+
+	// Default registry root path: <owner>/<tap repo minus homebrew- prefix>
+	if c.Registry.RootPath == "" && c.Registry.Owner != "" {
+		c.Registry.RootPath = fmt.Sprintf("%s/%s",
+			c.Registry.Owner, strings.TrimPrefix(c.Tap.Repo, "homebrew-"))
+	}
+
+	// Default homepage from GitHub coordinates
+	if c.Formula.Homepage == "" && c.Source.Owner != "" && c.Source.Repo != "" {
+		c.Formula.Homepage = fmt.Sprintf("https://github.com/%s/%s", c.Source.Owner, c.Source.Repo)
+	}
+	if c.Formula.HeadBranch == "" {
+		c.Formula.HeadBranch = "main"
 	}
 
 	// Default binary to formula name
-	if len(c.Binaries) == 0 && c.Formula != "" {
-		c.Binaries = []BinaryConfig{{Name: c.Formula, InstallPath: "bin"}}
+	if len(c.Binaries) == 0 && c.Formula.Name != "" {
+		c.Binaries = []BinaryConfig{{Name: c.Formula.Name, InstallPath: "bin"}}
 	}
 
 	// Default install path for binaries
@@ -221,12 +315,18 @@ func (e *MultiError) Error() string {
 
 // Validate performs comprehensive config validation
 func (c *Config) Validate() error {
+	return c.ValidateFor(true)
+}
+
+// ValidateFor validates the config for a pipeline stage. needToken=false
+// skips the registry-token requirement (local build stage).
+func (c *Config) ValidateFor(needToken bool) error {
 	var errs []error
 
 	// Required: formula name
-	if c.Formula == "" {
+	if c.Formula.Name == "" {
 		errs = append(errs, &ValidationError{
-			Field:   "formula",
+			Field:   "formula.name",
 			Message: "formula name is required",
 		})
 	}
@@ -312,10 +412,10 @@ func (c *Config) Validate() error {
 	}
 
 	// Registry validation
-	if c.Registry.Owner == "" {
+	if c.Registry.RootPath == "" {
 		errs = append(errs, &ValidationError{
-			Field:   "registry.owner",
-			Message: "registry owner is required (defaults to --owner if set)",
+			Field:   "registry.root_path",
+			Message: "registry root path is required (derived from --owner and tap repo if set)",
 		})
 	}
 
@@ -325,7 +425,7 @@ func (c *Config) Validate() error {
 			c.Registry.Token = token
 		} else if token := os.Getenv("GH_TOKEN"); token != "" {
 			c.Registry.Token = token
-		} else {
+		} else if needToken {
 			errs = append(errs, &ValidationError{
 				Field:   "registry.token",
 				Message: "token is required\n    Hint: set GITHUB_TOKEN or GH_TOKEN environment variable, or add registry.token to .gobottle.yaml\n    The token needs 'write:packages' scope for GHCR access",
@@ -353,6 +453,17 @@ func (c *Config) Validate() error {
 			errs = append(errs, &ValidationError{
 				Field:   fmt.Sprintf("binaries[%d].name", i),
 				Message: "binary name is required",
+			})
+		}
+	}
+
+	// Template file must exist when configured
+	if c.Formula.Template != "" {
+		if _, err := os.Stat(c.Formula.Template); err != nil {
+			errs = append(errs, &ValidationError{
+				Field:   "formula.template",
+				Value:   c.Formula.Template,
+				Message: "template file does not exist",
 			})
 		}
 	}
@@ -393,14 +504,9 @@ func (c *Config) ApplyGitDefaults() {
 		}
 	}
 
-	// Cascade owner to other owner fields
-	if c.Source.Owner != "" {
-		if c.Registry.Owner == "" {
-			c.Registry.Owner = c.Source.Owner
-		}
-		if c.Tap.Owner == "" {
-			c.Tap.Owner = c.Source.Owner
-		}
+	// Default the formula name to the repo name
+	if c.Formula.Name == "" && c.Source.Repo != "" {
+		c.Formula.Name = c.Source.Repo
 	}
 
 	// Detect version from tag for ANY source type (not just github)
@@ -430,4 +536,56 @@ func (c *Config) ApplyGitDefaults() {
 	if c.Source.Type == "github" && c.Source.Tag == "" && c.Version != "" {
 		c.Source.Tag = git.NormalizeVersion(c.Version)
 	}
+}
+
+// SourceURL returns the source tarball URL for the formula.
+// Returns explicit URL if set, otherwise derives from GitHub owner/repo/version.
+// Returns empty string when derivation is not possible.
+func (c *Config) SourceURL() string {
+	if c.Source.URL != "" {
+		return c.Source.URL
+	}
+
+	// Need owner and repo to derive GitHub URL
+	if c.Source.Owner == "" || c.Source.Repo == "" {
+		return ""
+	}
+
+	// Determine tag: explicit tag, or "v" + version
+	tag := c.Source.Tag
+	if tag == "" && c.Version != "" {
+		tag = "v" + c.Version
+	}
+	if tag == "" {
+		return ""
+	}
+
+	return fmt.Sprintf("https://github.com/%s/%s/archive/refs/tags/%s.tar.gz",
+		c.Source.Owner, c.Source.Repo, tag)
+}
+
+// GitURL returns the git clone URL for the source repository (for head stanzas).
+func (c *Config) GitURL() string {
+	if c.Source.Owner == "" || c.Source.Repo == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/%s.git", c.Source.Owner, c.Source.Repo)
+}
+
+// TapGitHubURL returns the GitHub URL for the tap repository
+func (c *Config) TapGitHubURL() string {
+	if c.Tap.Owner == "" || c.Tap.Repo == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://github.com/%s/%s", c.Tap.Owner, c.Tap.Repo)
+}
+
+// RootURL returns the bottle block root_url. Brew appends "/<formula>" to
+// this when constructing manifest and blob URLs, so the formula name must
+// NOT be part of it.
+func (c *Config) RootURL() string {
+	if c.Registry.Host == "" || c.Registry.RootPath == "" {
+		return ""
+	}
+	return fmt.Sprintf("https://%s/v2/%s", c.Registry.Host, strings.ToLower(c.Registry.RootPath))
 }

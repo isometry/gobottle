@@ -27,8 +27,8 @@ type GoSourceConfig struct {
 	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})
 	Ldflags string
 
-	// Extra environment variables for go build
-	Env map[string]string
+	// Extra environment variables for go build, as KEY=value strings
+	Env []string
 
 	// Enable CGO (default: false for portable static binaries)
 	CGOEnabled bool
@@ -59,6 +59,10 @@ type GoSourceConfig struct {
 
 	// Binary names to use (defaults to package base name)
 	Binaries []string
+
+	// Targets restricts the GOOS/GOARCH combinations to build
+	// (default: all Homebrew-supported targets)
+	Targets []BuildTarget
 }
 
 // GoSource builds Go binaries and creates artifacts for bottle building
@@ -98,6 +102,10 @@ func NewGoSource(cfg GoSourceConfig) (*GoSource, error) {
 	}
 	if cfg.Parallel <= 0 {
 		cfg.Parallel = runtime.GOMAXPROCS(0)
+	}
+	if cfg.Ldflags == "" {
+		// Strip symbol tables by default, like GoReleaser
+		cfg.Ldflags = "-s -w"
 	}
 
 	// Verify mod_dir exists and contains go.mod
@@ -147,7 +155,10 @@ func (s *GoSource) List(ctx context.Context) ([]Artifact, error) {
 
 // build compiles Go binaries for all target platforms
 func (s *GoSource) build(ctx context.Context) error {
-	targets := AllBuildTargets()
+	targets := s.config.Targets
+	if len(targets) == 0 {
+		targets = AllBuildTargets()
+	}
 
 	// Render ldflags template
 	ldflags, err := s.renderLdflags()
@@ -285,9 +296,7 @@ func (s *GoSource) goBuild(ctx context.Context, target BuildTarget, pkg, outputP
 	}
 
 	// Add extra environment variables
-	for k, v := range s.config.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	cmd.Env = append(cmd.Env, s.config.Env...)
 
 	// Capture output for error messages
 	var stderr bytes.Buffer

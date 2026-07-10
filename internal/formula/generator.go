@@ -8,52 +8,171 @@ import (
 	"unicode"
 )
 
-// formulaTemplate is the Ruby formula template
-const formulaTemplate = `class {{ .ClassName }} < Formula
-  desc "{{ .Description }}"
-  homepage "{{ .Homepage }}"
-  url "{{ .URL }}"
-  sha256 "{{ .SHA256 }}"
-  license "{{ .License }}"
+// defaultTemplate renders a complete Homebrew formula from the Formula model.
+// Stanzas are conditional: empty values are omitted entirely rather than
+// rendered as empty strings (brew audit rejects `desc ""` / `license ""`).
+const defaultTemplate = `class {{ .ClassName }} < Formula
+{{- if .Description }}
+  desc {{ quote .Description }}
+{{- end }}
+{{- if .Homepage }}
+  homepage {{ quote .Homepage }}
+{{- end }}
+{{- if .URL }}
+  url {{ quote .URL }}
+{{- end }}
+{{- if .SHA256 }}
+  sha256 {{ quote .SHA256 }}
+{{- end }}
+{{- if .License }}
+  license {{ quote .License }}
+{{- end }}
+{{- if .Head }}
+  head {{ quote .Head.URL }}, branch: {{ quote .Head.Branch }}
+{{- end }}
 {{- if .Bottles }}
 
   bottle do
-    root_url "{{ (index .Bottles 0).RootURL }}"
+    root_url {{ quote .RootURL }}
+{{- if gt .Rebuild 0 }}
+    rebuild {{ .Rebuild }}
+{{- end }}
 {{- range .Bottles }}
-    sha256 cellar: {{ .Cellar }}, {{ .Platform }}: "{{ .SHA256 }}"
+    sha256 cellar: {{ cellar .Cellar }}, {{ .Platform }}: {{ quote .SHA256 }}
 {{- end }}
   end
+{{- end }}
+{{- range .Dependencies }}
+
+  depends_on {{ quote . }}
+{{- end }}
+{{- range .Conflicts }}
+
+  conflicts_with {{ quote . }}
 {{- end }}
 
   def install
 {{- range .Binaries }}
-    bin.install "{{ . }}"
+    bin.install {{ quote . }}
+{{- end }}
+{{- if .Completions }}
+{{- range .Binaries }}
+    generate_completions_from_executable(bin/{{ quote . }}, "completion")
+{{- end }}
+{{- end }}
+{{- range .ExtraInstall }}
+    {{ . }}
 {{- end }}
   end
+{{- if .Caveats }}
+
+  def caveats
+    <<~EOS
+{{ indentHeredoc .Caveats }}
+    EOS
+  end
+{{- end }}
+{{- if .Service }}
+
+  service do
+{{ indentBlock .Service }}
+  end
+{{- end }}
 
   test do
-    system bin/"{{ index .Binaries 0 }}", "--version"
+{{- if .Test.Raw }}
+{{ indentBlock .Test.Raw }}
+{{- else }}
+    system bin/{{ quote (index .Binaries 0) }}{{ range .Test.Command }}, {{ quote . }}{{ end }}
+{{- end }}
   end
 end
 `
 
-// Generate generates a Ruby formula from the Formula struct
-func Generate(f *Formula) (string, error) {
+// Head describes an optional `head` stanza.
+type Head struct {
+	URL    string // git URL, e.g. https://github.com/owner/repo.git
+	Branch string // e.g. "main"
+}
+
+// Test describes the `test do` block. If Raw is set it is used verbatim
+// (indented); otherwise `system bin/"<first binary>", <Command...>` is
+// rendered, with Command defaulting to ["--version"].
+type Test struct {
+	Command []string
+	Raw     string
+}
+
+// Generate renders a Ruby formula from the Formula model using the default
+// template, or tmplText if non-empty (a user-supplied override receiving the
+// same model).
+func Generate(f *Formula, tmplText string) (string, error) {
 	if f.ClassName == "" {
 		f.ClassName = ToPascalCase(f.Name)
 	}
+	if f.Test.Command == nil && f.Test.Raw == "" {
+		f.Test.Command = []string{"--version"}
+	}
+	if len(f.Binaries) == 0 {
+		return "", fmt.Errorf("formula %s: at least one binary is required", f.Name)
+	}
+	if f.URL == "" && f.Head == nil {
+		return "", fmt.Errorf("formula %s: a source url (or head) is required", f.Name)
+	}
 
-	tmpl, err := template.New("formula").Parse(formulaTemplate)
+	if tmplText == "" {
+		tmplText = defaultTemplate
+	}
+
+	tmpl, err := template.New("formula").Funcs(template.FuncMap{
+		"quote":         quoteRuby,
+		"cellar":        cellarValue,
+		"indentHeredoc": indentLines(6),
+		"indentBlock":   indentLines(4),
+	}).Parse(tmplText)
 	if err != nil {
 		return "", fmt.Errorf("failed to parse formula template: %w", err)
 	}
 
 	var buf bytes.Buffer
 	if err := tmpl.Execute(&buf, f); err != nil {
-		return "", fmt.Errorf("failed to execute formula template: %w", err)
+		return "", fmt.Errorf("failed to render formula: %w", err)
 	}
 
 	return buf.String(), nil
+}
+
+// quoteRuby renders a double-quoted Ruby string literal.
+func quoteRuby(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "#{", `\#{`)
+	return `"` + s + `"`
+}
+
+// cellarValue renders a cellar setting: Ruby symbols (":any",
+// ":any_skip_relocation") stay bare, absolute paths are quoted.
+func cellarValue(cellar string) string {
+	if strings.HasPrefix(cellar, ":") {
+		return cellar
+	}
+	return quoteRuby(cellar)
+}
+
+// indentLines returns a template func indenting every non-empty line by n spaces.
+func indentLines(n int) func(string) string {
+	pad := strings.Repeat(" ", n)
+	return func(s string) string {
+		lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+		for i, line := range lines {
+			if strings.TrimSpace(line) != "" {
+				lines[i] = pad + line
+			} else {
+				lines[i] = ""
+			}
+		}
+		return strings.Join(lines, "\n")
+	}
 }
 
 // ToPascalCase converts a string to PascalCase for Ruby class names

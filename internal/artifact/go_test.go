@@ -71,9 +71,9 @@ func TestGoSource_RenderLdflags(t *testing.T) {
 		expected string
 	}{
 		{
-			name:     "empty ldflags",
+			name:     "empty ldflags defaults to strip flags",
 			ldflags:  "",
-			expected: "",
+			expected: "-s -w",
 		},
 		{
 			name:     "version only",

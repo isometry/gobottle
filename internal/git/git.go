@@ -199,6 +199,15 @@ func (r *Repository) GetLatestReachableTag() (string, error) {
 	return bestTag, nil
 }
 
+// GetHeadCommit returns the full SHA of the commit at HEAD.
+func (r *Repository) GetHeadCommit() (string, error) {
+	head, err := r.repo.Head()
+	if err != nil {
+		return "", fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	return head.Hash().String(), nil
+}
+
 // IsClean returns true if the working tree has no uncommitted changes.
 func (r *Repository) IsClean() (bool, error) {
 	wt, err := r.repo.Worktree()
