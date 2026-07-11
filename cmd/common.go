@@ -101,9 +101,11 @@ func formulaModel(cfg *config.Config) (*formula.Formula, string, error) {
 		Conflicts:    f.Conflicts,
 		Caveats:      f.Caveats,
 		Service:      f.Service,
-		Completions:  f.Install.Completions,
 		ExtraInstall: f.Install.Extra,
 		Test:         formula.Test{Command: f.Test.Command, Raw: f.Test.Raw},
+	}
+	if f.Install.Completions {
+		model.Completions = f.Install.CompletionsCommand
 	}
 	if f.Head && cfg.GitURL() != "" {
 		model.Head = &formula.Head{URL: cfg.GitURL(), Branch: f.HeadBranch}

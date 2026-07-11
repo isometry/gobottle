@@ -62,8 +62,9 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- end }}
 {{- end }}
 {{- if .Completions }}
+{{- $cmd := .Completions }}
 {{- range .BinBinaries }}
-    generate_completions_from_executable(bin/{{ quote . }}, "completion")
+    generate_completions_from_executable(bin/{{ quote . }}{{ range $cmd }}, {{ quote . }}{{ end }})
 {{- end }}
 {{- end }}
 {{- range .ExtraInstall }}

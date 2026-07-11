@@ -22,7 +22,7 @@ type Formula struct {
 	Dependencies []string        // depends_on lines
 	Conflicts    []string        // conflicts_with lines
 	Binaries     []BinaryInstall // install lines (first bin-installed binary drives the default test)
-	Completions  bool            // generate_completions_from_executable for each bin-installed binary
+	Completions  []string        // completion-generating command rendered per bin-installed binary (empty: no line)
 	ExtraInstall []string        // verbatim extra install lines
 	Caveats      string          // literal caveats text
 	Service      string          // verbatim service block body

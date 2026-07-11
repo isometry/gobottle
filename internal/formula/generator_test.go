@@ -23,7 +23,7 @@ func TestGenerateFull(t *testing.T) {
 		Dependencies: []string{"git"},
 		Conflicts:    []string{"other-tool"},
 		Binaries:     []BinaryInstall{{Name: "my-tool", InstallPath: "bin"}},
-		Completions:  true,
+		Completions:  []string{"completion"},
 		Caveats:      "Remember to breathe.",
 		Test:         Test{Command: []string{"version"}},
 	}
@@ -113,7 +113,7 @@ func TestGenerateInstallPaths(t *testing.T) {
 			{Name: "helper", InstallPath: "libexec"},
 			{Name: "plugin", InstallPath: "share/tool/plugins"},
 		},
-		Completions: true,
+		Completions: []string{"completion"},
 	}
 
 	got, err := Generate(f, "")
@@ -139,6 +139,23 @@ func TestGenerateInstallPaths(t *testing.T) {
 		if strings.Contains(got, forbidden) {
 			t.Errorf("completions generated for non-bin binary %q:\n%s", forbidden, got)
 		}
+	}
+}
+
+func TestGenerateCompletionsCommand(t *testing.T) {
+	f := &Formula{
+		Name:        "tool",
+		URL:         "https://example.com/tool-1.0.0.tar.gz",
+		Binaries:    []BinaryInstall{{Name: "tool"}},
+		Completions: []string{"gen", "completion"},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if want := `    generate_completions_from_executable(bin/"tool", "gen", "completion")`; !strings.Contains(got, want) {
+		t.Errorf("formula missing %q:\n%s", want, got)
 	}
 }
 
