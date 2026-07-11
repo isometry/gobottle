@@ -11,6 +11,7 @@ import (
 
 	"github.com/isometry/gobottle/internal/config"
 	"github.com/isometry/gobottle/internal/formula"
+	"github.com/isometry/gobottle/internal/git"
 	"github.com/isometry/gobottle/internal/tap"
 	"github.com/isometry/gobottle/internal/util"
 	"github.com/spf13/cobra"
@@ -59,6 +60,13 @@ dependencies, caveats, test block etc. are driven by the formula: section of
 			}
 			if cfg.Formula.Description == "" {
 				warn("formula.description is empty - brew audit will complain")
+			}
+			if !rootOpts.DryRun {
+				if repo, err := git.Open("."); err == nil {
+					if dirty, err := repo.HasUncommittedChanges(); err == nil && dirty {
+						warn("working tree has uncommitted changes - published bottles will not match the %s tag", cfg.Version)
+					}
+				}
 			}
 
 			// Obtain a manifest: from input, or by running the pipeline.
