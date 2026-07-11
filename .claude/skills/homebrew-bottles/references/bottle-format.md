@@ -21,14 +21,17 @@ Complete technical specification for Homebrew bottle tarball format.
 
 ### Local vs Upload Filename
 
-Homebrew uses slightly different naming locally vs for upload:
+From brew's `Bottle::Filename` (bottle.rb):
 
-| Context | Separator | Example |
-|---------|-----------|---------|
-| Local filename | Double dash `--` | `wget--2.12.arm64_sonoma.bottle.tar.gz` |
-| Upload/URL | Single dash `-` | `wget-2.12.arm64_sonoma.bottle.tar.gz` |
+| Context | Separator | Source method | Example |
+|---------|-----------|---------------|---------|
+| Local filename | Double dash `--` | `#to_str` | `wget--2.12.arm64_sonoma.bottle.tar.gz` |
+| GHCR resolved basename | Double dash `--` | `#github_packages` | `wget--2.12.arm64_sonoma.bottle.tar.gz` |
+| GitHub-releases asset (URL-encoded) | Single dash `-` | `#url_encode` | `wget-2.12.arm64_sonoma.bottle.tar.gz` |
 
-**For gobottle**: Use single-dash format for both (simpler, works everywhere).
+**For gobottle**: use the double-dash form; it matches what brew computes for
+both the download cache and GHCR. (The filename is metadata — GHCR pours are
+addressed by blob digest, not filename.)
 
 ## Tarball Internal Structure
 

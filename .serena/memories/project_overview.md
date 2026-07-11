@@ -1,31 +1,44 @@
 # gobottle - Project Overview
 
 ## Purpose
-gobottle is a CLI tool that builds and publishes Homebrew bottles from GoReleaser artifacts. It's essentially a "ko-like" tool for Go binaries targeting Homebrew distribution.
+gobottle is "ko for Homebrew": it cross-compiles Go binaries, packages them as
+real Homebrew bottles, publishes them to GHCR with homebrew-core's exact OCI
+conventions, and fully generates the tap formula. Pure Go, no Ruby/skopeo, no
+per-OS build runners. Status: experimental (v0.1.0, July 2026); positioning is
+experiment/learning per the maintainer.
 
-## What It Does
-1. Fetches artifacts from GitHub Releases or local `dist/` directory
-2. Discovers supported Homebrew platforms from Homebrew source
-3. Builds bottles (tar.gz archives) for each platform
-4. Pushes bottles to GHCR (GitHub Container Registry) as OCI artifacts
-5. Updates tap formula with the bottle block
+## Verified end-to-end (2026-07-11)
+`gobottle release` published gobottle itself to ghcr.io/isometry/test/gobottle
+and committed Formula/gobottle.rb to isometry/homebrew-test; `brew install
+isometry/test/gobottle` poured successfully on macOS (Homebrew 6.0.9), and
+`brew test` passed. Private-package pours work with
+HOMEBREW_DOCKER_REGISTRY_TOKEN=$(gh auth token | base64).
+
+## CLI contract
+- `gobottle build` -> bottles + bottles.json (no token needed)
+- `gobottle push` -> OCI index per version[-rebuild] tag (GITHUB_TOKEN, write:packages)
+- `gobottle release` -> regenerated formula committed to tap (or --tap-path local write)
+- stdout = JSON (-o json), stderr = progress; exit 2 = validation error
+- config: .gobottle.yaml with `formula:` content section; env GOBOTTLE_*, GOBOTTLE_REPO
+
+## Design sources
+Homebrew's github_packages.rb / bottle.rb / resource.rb / utils/bottles.rb are
+the reference implementation; the "oldest supported macOS tag per arch"
+strategy is valid because brew falls back to older-or-equal same-arch bottles
+(extend/os/mac/utils/bottles.rb).
+
+## Known gaps / follow-ups
+- formula.install.completions emits generate_completions_from_executable in
+  def install, which does NOT run on bottle pours - completions should be
+  generated at bottle-build time and shipped inside the bottle (open gap).
+- {{.Date}} ldflags stamping uses build wall-clock -> breaks bottle
+  determinism; should default to the commit timestamp.
+- MinSupportedMacOSMajor=12 (monterey) hardcoded in platform/discover.go -
+  deliberate max-compatibility choice, revisit as Homebrew drops versions.
+- GHCR package visibility must be flipped public manually (UI) for anonymous
+  pours; gobottle warns after push.
 
 ## Tech Stack
-- **Language**: Go 1.25.5
-- **CLI Framework**: cobra + viper
-- **Git Operations**: go-git/go-git/v5 (pure Go, no exec)
-- **OCI/Registry**: google/go-containerregistry
-- **GitHub API**: google/go-github/v68
-- **Semver Parsing**: Masterminds/semver/v3
-- **Build Tool**: GoReleaser
-
-## Key Dependencies
-- `github.com/spf13/cobra` - CLI commands
-- `github.com/spf13/viper` - Configuration
-- `github.com/go-git/go-git/v5` - Git operations (no shell exec)
-- `github.com/google/go-containerregistry` - OCI image/registry operations
-- `github.com/google/go-github/v68` - GitHub API client
-- `github.com/Masterminds/semver/v3` - Semantic version parsing
-
-## Entry Point
-- `main.go` → `cmd.Execute()` → `cmd.NewRootCommand()`
+Go 1.25; cobra + viper (single Unmarshal in config.Load); go-git;
+google/go-containerregistry (custom bottleLayer keeps bottle bytes exact);
+go-github for tap commits.

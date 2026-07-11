@@ -105,15 +105,23 @@ func detectMacOSVersion() string {
 
 ### Minimum Target Version Strategy
 
-For maximum compatibility, target the oldest supported macOS version:
+**One bottle per arch is enough.** Brew's macOS tag matching falls back to a
+bottle built for an **older-or-equal** macOS version of the same arch
+(`find_older_compatible_tag` in `extend/os/mac/utils/bottles.rb`, verified):
+a bottle tagged `arm64_monterey` pours on Sonoma, Sequoia, Tahoe, etc. There
+is no newer-to-older fallback, so tag with the OLDEST version you want to
+support:
 
-| Strategy | ARM64 Tag | x86_64 Tag | Pros | Cons |
-|----------|-----------|------------|------|------|
-| Current only | `arm64_sequoia` | `sequoia` | Simplest | Limited reach |
-| Recent 2 | `arm64_sonoma` | `sonoma` | Good balance | Some older users excluded |
-| All supported | `arm64_ventura` | `ventura` | Maximum reach | More bottles to build |
+| Oldest tag published | Pours on |
+|----------------------|----------|
+| `arm64_monterey` / `monterey` | macOS 12 and everything newer |
+| `arm64_sonoma` / `sonoma` | macOS 14 and everything newer |
 
-**Recommendation**: Build for `sonoma` and `sequoia` to cover most users.
+For cross-compiled Go binaries the artifact is identical regardless of macOS
+version, so publishing multiple macOS-version tags per arch is pure waste —
+publish one bottle per arch tagged with the oldest supported version.
+Linux tags (`x86_64_linux`, `aarch64_linux`) match exactly, no fallback
+needed.
 
 ## Default Cellar Paths
 

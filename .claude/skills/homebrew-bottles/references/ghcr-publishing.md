@@ -1,35 +1,50 @@
 # GHCR Publishing Reference
 
-How to publish Homebrew bottles to GitHub Container Registry (ghcr.io).
+How to publish Homebrew bottles to GitHub Container Registry (ghcr.io) so
+that `brew install` can actually pour them.
 
-## Overview
+Ground truth: `Library/Homebrew/github_packages.rb` (publish side) and
+`bottle.rb` / `resource.rb` / `utils/bottles.rb` (pour side) in Homebrew/brew.
+Everything below was verified against those files and a live `brew install`
+from a scratch tap (July 2026).
 
-Homebrew stores bottles in GitHub Container Registry as OCI (Open Container Initiative) images. Each bottle is a single-layer OCI image with the bottle tarball as the layer content.
+## URL Structure — the #1 way to get this wrong
 
-## URL Structure
-
-### Registry Base
+**Brew appends the formula name to `root_url` itself.** The formula's
+`root_url` must therefore NOT include the formula name:
 
 ```
-ghcr.io/v2/<owner>/<repo>
+image path:  ghcr.io/<root_path>/<formula>          (what you push to)
+root_url:    https://ghcr.io/v2/<root_path>          (what the formula declares)
+manifest:    <root_url>/<formula>/manifests/<version>[-<rebuild>]   (brew fetches)
+blob:        <root_url>/<formula>/blobs/sha256:<bottle sha256>      (brew fetches)
 ```
 
-For homebrew-core: `ghcr.io/v2/homebrew/core`
-For custom taps: `ghcr.io/v2/<user>/homebrew-<tap>`
+- homebrew-core: image `ghcr.io/homebrew/core/wget`, root_url
+  `https://ghcr.io/v2/homebrew/core`
+- personal tap: image `ghcr.io/<user>/<tap-minus-homebrew->/<formula>`,
+  root_url `https://ghcr.io/v2/<user>/<tap-minus-homebrew->`
 
-### Endpoints
+Formula-name sanitization (`GitHubPackages.image_formula_name`): `@` → `/`,
+`+` → `x`. The whole repository path must be lowercase.
 
-| Endpoint | Purpose |
-|----------|---------|
-| `/v2/<name>/manifests/<tag>` | Get/push manifest |
-| `/v2/<name>/blobs/<digest>` | Get/push blob (layer) |
-| `/v2/<name>/blobs/uploads/` | Initiate blob upload |
+If root_url includes the formula name, brew requests
+`.../<formula>/<formula>/...` and every install 404s.
 
-## OCI Image Structure
+## Tagging model
 
-### Image Index (Manifest List)
+- **One OCI *index* per version, tagged `<version>[-<rebuild>]`**
+  (e.g. `1.2.3`, `1.2.3-1` for rebuild 1). Tag grammar:
+  `^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`.
+- **Per-platform image manifests are referenced by digest from the index** —
+  they are NOT tagged individually.
+- **Always push an index, even for a single platform.** Brew parses the
+  manifest response for a `manifests[]` array and fails with
+  "Missing 'manifests' section." on a bare image manifest (`resource.rb`).
 
-For multi-platform bottles, an image index lists all platform-specific images:
+## OCI structure
+
+### Index (what the version tag points at)
 
 ```json
 {
@@ -38,405 +53,184 @@ For multi-platform bottles, an image index lists all platform-specific images:
   "manifests": [
     {
       "mediaType": "application/vnd.oci.image.manifest.v1+json",
-      "digest": "sha256:abc123...",
+      "digest": "sha256:<child manifest digest>",
       "size": 1234,
       "platform": {
         "architecture": "arm64",
         "os": "darwin",
-        "os.version": "macOS 14.0"
+        "os.version": "macOS 14"
       },
       "annotations": {
-        "sh.brew.bottle.digest": "sha256:def456...",
-        "org.opencontainers.image.ref.name": "1.0.0.arm64_sonoma"
-      }
-    }
-  ]
-}
-```
-
-### Image Manifest
-
-Each platform has its own manifest:
-
-```json
-{
-  "schemaVersion": 2,
-  "mediaType": "application/vnd.oci.image.manifest.v1+json",
-  "config": {
-    "mediaType": "application/vnd.oci.image.config.v1+json",
-    "digest": "sha256:empty...",
-    "size": 2
-  },
-  "layers": [
-    {
-      "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-      "digest": "sha256:bottle_sha...",
-      "size": 5000000,
-      "annotations": {
-        "org.opencontainers.image.title": "gobottle-1.0.0.arm64_sonoma.bottle.tar.gz"
+        "org.opencontainers.image.ref.name": "1.0.0.arm64_sonoma",
+        "sh.brew.bottle.digest": "<bottle tar.gz sha256, BARE HEX no sha256: prefix>",
+        "sh.brew.bottle.size": "5000000",
+        "sh.brew.bottle.installed_size": "17065472",
+        "sh.brew.tab": "{\"homebrew_version\":\"4.4.0\",\"built_as_bottle\":true,...}"
       }
     }
   ],
   "annotations": {
-    "sh.brew.bottle.digest": "sha256:bottle_sha...",
-    "sh.brew.tab": "{\"homebrew_version\":\"4.4.0\",...}",
-    "org.opencontainers.image.created": "2024-01-23T12:00:00Z",
-    "org.opencontainers.image.description": "Homebrew bottle for gobottle",
-    "org.opencontainers.image.title": "gobottle",
-    "org.opencontainers.image.version": "1.0.0"
+    "com.github.package.type": "homebrew_bottle",
+    "org.opencontainers.image.ref.name": "1.0.0",
+    "org.opencontainers.image.source": "https://github.com/user/homebrew-tap"
   }
 }
 ```
 
-### Key Annotations
+### How brew selects and validates (resource.rb)
 
-| Annotation | Purpose |
-|------------|---------|
-| `sh.brew.bottle.digest` | **Critical**: SHA256 of bottle tarball |
-| `sh.brew.tab` | JSON-encoded Tab (INSTALL_RECEIPT.json content) |
-| `org.opencontainers.image.title` | Formula name |
-| `org.opencontainers.image.version` | Version string |
-| `org.opencontainers.image.ref.name` | Full version with platform |
+1. Fetch the index with `Accept: application/vnd.oci.image.index.v1+json`.
+2. Find the child whose annotations satisfy **both**:
+   - `sh.brew.bottle.digest` == the formula's bottle sha256 (bare hex)
+   - `org.opencontainers.image.ref.name` == `<version>.<platform_tag>[.<rebuild>]`
+3. **Read `sh.brew.tab` from that child** (runtime dependencies). Missing or
+   blank → hard error: *"Couldn't find tab from manifest."* — install aborts.
+4. Fetch the layer blob by the formula's sha256 and verify.
+
+All three annotations are therefore load-bearing; `sh.brew.bottle.size`,
+`installed_size`, licenses etc. are informational.
+
+### Child image manifest
+
+- media type `application/vnd.oci.image.manifest.v1+json`
+- **real config blob** (`application/vnd.oci.image.config.v1+json`) with
+  `architecture`, `os`, `os.version` (e.g. `"macOS 14"`), and
+  `rootfs.diff_ids` = [sha256 of the *uncompressed* tar] — this is what brew
+  itself publishes (not an empty `{}` config)
+- exactly one layer, `application/vnd.oci.image.layer.v1.tar+gzip`, whose
+  digest is the bottle file's sha256 — **the blob must be the bottle tar.gz
+  byte-for-byte** since that digest is what the formula records
+- brew mirrors the descriptor annotations onto the manifest itself
+
+## Go implementation (go-containerregistry, verified working)
+
+Key insight: don't let the library re-encode the bottle. Implement `v1.Layer`
+so `Digest()` returns the file's sha256 and `DiffID()` the uncompressed-tar
+sha256; `Compressed()` streams the file as-is.
+
+```go
+// bottleLayer preserves the bottle bytes exactly.
+type bottleLayer struct {
+    path   string
+    digest v1.Hash // sha256 of the .tar.gz file == formula sha256
+    diffID v1.Hash // sha256 of the raw tar stream
+    size   int64
+}
+func (l *bottleLayer) MediaType() (types.MediaType, error) { return types.OCILayer, nil }
+func (l *bottleLayer) Compressed() (io.ReadCloser, error)  { return os.Open(l.path) }
+// ... Digest, DiffID, Size, Uncompressed (gzip reader over the file)
+
+func bottleImage(b *Bottle) (v1.Image, error) {
+    img := mutate.MediaType(empty.Image, types.OCIManifestSchema1) // force OCI:
+    img = mutate.ConfigMediaType(img, types.OCIConfigJSON)         // empty.Image defaults to Docker types!
+    img, _ = mutate.ConfigFile(img, &v1.ConfigFile{
+        Architecture: "arm64", OS: "darwin", OSVersion: "macOS 14",
+        RootFS: v1.RootFS{Type: "layers"}, // diff_ids appended by mutate.AppendLayers
+    })
+    img, err := mutate.AppendLayers(img, layer)
+    // annotations: ref.name, sh.brew.bottle.digest, sh.brew.tab, ...
+    return mutate.Annotations(img, annotations).(v1.Image), err
+}
+
+// One index per version tag; remote.WriteIndex pushes children by digest.
+idx := mutate.IndexMediaType(empty.Index, types.OCIImageIndex)
+idx = mutate.AppendManifests(idx, adds...) // IndexAddendum{Add: img, Descriptor: {Platform, Annotations}}
+idx = mutate.Annotations(idx, indexAnnotations).(v1.ImageIndex)
+err := remote.WriteIndex(repo.Tag("1.2.3"), idx, remote.WithAuthFromKeychain(kc))
+```
+
+**Keep-old / append semantics** (what `brew pr-upload --keep-old` does):
+fetch the existing index, drop children being replaced, append new ones:
+
+```go
+if existing, err := remote.Index(tagRef, opts...); err == nil {
+    idx = mutate.RemoveManifests(existing, func(d v1.Descriptor) bool {
+        return replaced[d.Annotations["org.opencontainers.image.ref.name"]]
+    })
+}
+idx = mutate.AppendManifests(idx, adds...)
+```
+
+Content-addressed pushes make re-runs idempotent **iff bottles are
+deterministic** (sorted tar entries, zeroed owners, fixed mtimes).
+
+Auth: `authn.AuthConfig{Username: "oauth2", Password: GITHUB_TOKEN}` (GHCR
+ignores the username) via a keychain scoped to the registry host.
 
 ## Authentication
 
-### Public Read Access
+| Purpose | Mechanism |
+|---------|-----------|
+| Anonymous pour (public package) | `Authorization: Bearer QQ==` (base64 empty string) |
+| Pour from private package | `HOMEBREW_DOCKER_REGISTRY_TOKEN=$(echo -n $PAT \| base64)` — verified working with `gh auth token` |
+| Push | PAT / gh token with `write:packages` (fine-grained PATs and OIDC are NOT accepted by GHCR); inside Actions, `GITHUB_TOKEN` with `packages: write` |
+| Registry token exchange (manual curl) | `curl -u "x:$PAT" "https://ghcr.io/token?scope=repository:<path>:pull"` |
 
-Homebrew uses a default token for public access:
+## Visibility — the first-push trap
 
-```
-Authorization: Bearer QQ==
-```
+- **The first push always creates a PRIVATE package.** Anonymous `QQ==`
+  pours fail (401/403) until visibility is flipped.
+- **The packages REST API cannot change visibility** — it's UI-only:
+  package page → Package settings → Danger Zone → Change visibility.
+  (Do not trust snippets claiming `gh api -X PATCH ... -f visibility=public`
+  works; it doesn't.)
+- Publishing tools should HEAD the tag anonymously after pushing and warn
+  when it isn't publicly readable.
+- `org.opencontainers.image.source` on the index links the package to a
+  repository (UI association; it does not auto-publicize the package).
 
-`QQ==` is base64-encoded empty string.
-
-### For Publishing (Write Access)
-
-Use a GitHub Personal Access Token (PAT) with `write:packages` scope:
-
-```bash
-# Get token
-echo $GITHUB_TOKEN | base64
-# or
-echo -n "username:ghp_xxxx" | base64
-```
-
-```
-Authorization: Bearer <base64_encoded_token>
-```
-
-## Upload Process
-
-### Step 1: Upload Blob (Bottle Tarball)
+## Verifying a published bottle
 
 ```bash
-# 1. Initiate upload
-UPLOAD_URL=$(curl -s -X POST \
-  -H "Authorization: Bearer $TOKEN" \
-  "https://ghcr.io/v2/user/bottles/gobottle/blobs/uploads/" \
-  -D - | grep -i location | cut -d' ' -f2 | tr -d '\r')
+TOKEN=$(curl -s -u "x:$(gh auth token)" \
+  "https://ghcr.io/token?scope=repository:user/tap/formula:pull" | jq -r .token)
 
-# 2. Upload blob with digest
-DIGEST="sha256:$(sha256sum gobottle-1.0.0.arm64_sonoma.bottle.tar.gz | cut -d' ' -f1)"
+# Must be an INDEX with manifests[].annotations carrying digest/ref.name/tab
+curl -s -H "Authorization: Bearer $TOKEN" \
+  -H "Accept: application/vnd.oci.image.index.v1+json" \
+  "https://ghcr.io/v2/user/tap/formula/manifests/1.0.0" \
+  | jq '.manifests[].annotations | keys'
 
-curl -X PUT \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/octet-stream" \
-  --data-binary @gobottle-1.0.0.arm64_sonoma.bottle.tar.gz \
-  "${UPLOAD_URL}&digest=${DIGEST}"
+# The blob at the formula's sha256 must be the bottle file byte-for-byte
+curl -sL -H "Authorization: Bearer $TOKEN" \
+  "https://ghcr.io/v2/user/tap/formula/blobs/sha256:<bottle sha>" \
+  | shasum -a 256
 ```
 
-### Step 2: Upload Config Blob
-
-OCI requires a config blob (can be empty for bottles):
-
-```bash
-# Empty config
-echo -n '{}' > config.json
-CONFIG_DIGEST="sha256:$(sha256sum config.json | cut -d' ' -f1)"
-
-# Upload
-curl -X POST ... # same as above with config.json
-```
-
-### Step 3: Push Manifest
-
-```bash
-MANIFEST='{
-  "schemaVersion": 2,
-  "mediaType": "application/vnd.oci.image.manifest.v1+json",
-  "config": {
-    "mediaType": "application/vnd.oci.image.config.v1+json",
-    "digest": "'$CONFIG_DIGEST'",
-    "size": 2
-  },
-  "layers": [{
-    "mediaType": "application/vnd.oci.image.layer.v1.tar+gzip",
-    "digest": "'$DIGEST'",
-    "size": '$SIZE'
-  }],
-  "annotations": {
-    "sh.brew.bottle.digest": "'$DIGEST'"
-  }
-}'
-
-curl -X PUT \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/vnd.oci.image.manifest.v1+json" \
-  -d "$MANIFEST" \
-  "https://ghcr.io/v2/user/bottles/gobottle/manifests/1.0.0.arm64_sonoma"
-```
-
-## Using skopeo
-
-Easier than raw HTTP:
-
-```bash
-# Create OCI layout directory
-mkdir -p oci-image/blobs/sha256
-
-# Copy bottle as blob
-cp gobottle-1.0.0.arm64_sonoma.bottle.tar.gz oci-image/blobs/sha256/<sha256>
-
-# Create oci-layout file
-echo '{"imageLayoutVersion": "1.0.0"}' > oci-image/oci-layout
-
-# Create index.json and manifest files...
-
-# Push to GHCR
-skopeo copy \
-  --dest-creds="username:$GITHUB_TOKEN" \
-  oci:oci-image:1.0.0.arm64_sonoma \
-  docker://ghcr.io/user/bottles/gobottle:1.0.0.arm64_sonoma
-```
-
-## Go Implementation
-
-### Using go-containerregistry
-
-```go
-import (
-    "github.com/google/go-containerregistry/pkg/authn"
-    "github.com/google/go-containerregistry/pkg/name"
-    "github.com/google/go-containerregistry/pkg/v1"
-    "github.com/google/go-containerregistry/pkg/v1/empty"
-    "github.com/google/go-containerregistry/pkg/v1/mutate"
-    "github.com/google/go-containerregistry/pkg/v1/remote"
-    "github.com/google/go-containerregistry/pkg/v1/tarball"
-    "github.com/google/go-containerregistry/pkg/v1/types"
-)
-
-func PublishBottle(bottlePath, repo, tag string) error {
-    // Parse destination reference
-    ref, err := name.ParseReference(fmt.Sprintf("%s:%s", repo, tag))
-    if err != nil {
-        return err
-    }
-
-    // Create layer from bottle tarball
-    layer, err := tarball.LayerFromFile(bottlePath,
-        tarball.WithMediaType(types.OCILayer),
-    )
-    if err != nil {
-        return err
-    }
-
-    // Get layer digest for annotation
-    digest, err := layer.Digest()
-    if err != nil {
-        return err
-    }
-
-    // Create image with layer
-    img, err := mutate.AppendLayers(empty.Image, layer)
-    if err != nil {
-        return err
-    }
-
-    // Add annotations
-    img = mutate.Annotations(img, map[string]string{
-        "sh.brew.bottle.digest":           digest.String(),
-        "org.opencontainers.image.title":   "gobottle",
-        "org.opencontainers.image.version": "1.0.0",
-    }).(v1.Image)
-
-    // Push to registry
-    auth := authn.FromConfig(authn.AuthConfig{
-        Username: "username",
-        Password: os.Getenv("GITHUB_TOKEN"),
-    })
-
-    return remote.Write(ref, img, remote.WithAuth(auth))
-}
-```
-
-### Multi-Platform Index
-
-```go
-func PublishMultiPlatform(bottles []Bottle, repo string) error {
-    var manifests []mutate.IndexAddendum
-
-    for _, b := range bottles {
-        img, err := createImage(b)
-        if err != nil {
-            return err
-        }
-
-        manifests = append(manifests, mutate.IndexAddendum{
-            Add: img,
-            Descriptor: v1.Descriptor{
-                Platform: &v1.Platform{
-                    Architecture: b.OCIArch(),
-                    OS:           b.OCIOS(),
-                },
-                Annotations: map[string]string{
-                    "sh.brew.bottle.digest":                b.SHA256,
-                    "org.opencontainers.image.ref.name":    b.Tag(),
-                },
-            },
-        })
-    }
-
-    // Create index
-    idx := mutate.AppendManifests(empty.Index, manifests...)
-
-    // Push
-    ref, _ := name.ParseReference(repo + ":latest")
-    return remote.WriteIndex(ref, idx, remote.WithAuth(auth))
-}
-```
-
-## Formula Integration
-
-### Bottle Block from Published Bottles
-
-After publishing, update formula with bottle checksums:
+## Formula integration
 
 ```ruby
 bottle do
-  root_url "https://ghcr.io/v2/user/bottles/gobottle"
-  sha256 cellar: :any_skip_relocation, arm64_sonoma:  "abc123..."
-  sha256 cellar: :any_skip_relocation, sonoma:        "def456..."
-  sha256 cellar: :any_skip_relocation, x86_64_linux:  "ghi789..."
+  root_url "https://ghcr.io/v2/user/tap"   # NO formula name here
+  rebuild 1                                 # only when rebuild > 0
+  sha256 cellar: :any_skip_relocation, arm64_sonoma: "abc123..."
+  sha256 cellar: :any_skip_relocation, x86_64_linux: "def456..."
 end
 ```
 
-### Root URL Format
+The stable `url`/`sha256` above the bottle block are never fetched during a
+pour (only `brew audit` / `--build-from-source` touch them).
 
-| Format | Example |
-|--------|---------|
-| GHCR | `https://ghcr.io/v2/user/bottles/formula` |
-| GitHub Releases | `https://github.com/user/repo/releases/download/v1.0.0` |
-| Custom S3 | `https://bottles.example.com` |
-
-## Fetching Bottles
-
-### Using go-containerregistry
-
-```go
-func FetchBottle(repo, tag string) (io.ReadCloser, error) {
-    ref, err := name.ParseReference(fmt.Sprintf("%s:%s", repo, tag))
-    if err != nil {
-        return nil, err
-    }
-
-    img, err := remote.Image(ref, remote.WithAuth(authn.Anonymous))
-    if err != nil {
-        return nil, err
-    }
-
-    layers, err := img.Layers()
-    if err != nil || len(layers) == 0 {
-        return nil, errors.New("no layers")
-    }
-
-    return layers[0].Compressed()
-}
-```
-
-### Using curl
-
-```bash
-# 1. Get token
-TOKEN=$(curl -s "https://ghcr.io/token?scope=repository:user/bottles/gobottle:pull" | jq -r .token)
-
-# 2. Get manifest
-MANIFEST=$(curl -s \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Accept: application/vnd.oci.image.manifest.v1+json" \
-  "https://ghcr.io/v2/user/bottles/gobottle/manifests/1.0.0.arm64_sonoma")
-
-# 3. Extract blob digest
-BLOB=$(echo "$MANIFEST" | jq -r '.layers[0].digest')
-
-# 4. Download blob
-curl -L \
-  -H "Authorization: Bearer $TOKEN" \
-  "https://ghcr.io/v2/user/bottles/gobottle/blobs/$BLOB" \
-  -o gobottle.bottle.tar.gz
-```
-
-## Visibility and Permissions
-
-### Package Visibility
-
-GHCR packages can be:
-- **Private**: Only accessible with authentication
-- **Public**: Accessible with default `QQ==` token
-
-### Setting Visibility
-
-```bash
-# Via GitHub UI: Settings > Packages > Package settings > Danger Zone
-
-# Or via API
-gh api -X PATCH /user/packages/container/gobottle \
-  -f visibility=public
-```
-
-### Repository Connection
-
-For automatic visibility inheritance, connect package to repository:
-
-1. Go to package settings on GitHub
-2. Connect to a repository
-3. Package inherits repository visibility
-
-## Error Handling
-
-### Common Errors
+## Common Errors
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `UNAUTHORIZED` | Missing or invalid token | Check GITHUB_TOKEN |
-| `DENIED` | No write permission | Ensure `write:packages` scope |
-| `NAME_UNKNOWN` | Package doesn't exist | Push creates it |
-| `MANIFEST_UNKNOWN` | Tag doesn't exist | Check tag name |
-| `BLOB_UNKNOWN` | Layer not uploaded | Upload blob first |
-
-### Retry Strategy
-
-```go
-func withRetry(fn func() error, maxAttempts int) error {
-    var lastErr error
-    for i := 0; i < maxAttempts; i++ {
-        if err := fn(); err == nil {
-            return nil
-        } else {
-            lastErr = err
-            time.Sleep(time.Second * time.Duration(i+1))
-        }
-    }
-    return lastErr
-}
-```
+| 404 on manifests/blobs at install | root_url includes the formula name | root_url = registry path WITHOUT formula |
+| "Missing 'manifests' section." | pushed a bare image manifest | always push an index |
+| "Couldn't find tab from manifest." | child lacks `sh.brew.tab` annotation | annotate descriptors with the tab JSON |
+| "Couldn't find manifest matching bottle checksum." | digest/ref.name annotations don't match the formula | bare-hex `sh.brew.bottle.digest`; ref.name `<version>.<tag>[.<rebuild>]` |
+| 401/403 pulling anonymously | package still private | flip visibility in the UI (API can't) |
+| `DENIED` on push | token lacks `write:packages` | classic PAT or Actions `packages: write` |
+| brew 6: tap doesn't evaluate | tap trust | `brew trust user/repo` or `HOMEBREW_NO_REQUIRE_TAP_TRUST=1` |
 
 ## Best Practices
 
-1. **Use go-containerregistry** - Handles OCI complexity correctly
-2. **Include annotations** - `sh.brew.bottle.digest` is required
-3. **Multi-platform index** - Easier for users than separate tags
-4. **Reproducible digests** - Same bottle = same digest
-5. **Verify after push** - Pull and compare digest
-6. **Public visibility** - For open-source projects
-7. **Connect to repo** - For visibility inheritance
+1. **go-containerregistry over raw HTTP/skopeo** — but keep the bottle bytes
+   exact (custom layer, not re-encoding)
+2. **Deterministic bottles** ⇒ stable digests ⇒ idempotent re-pushes and safe
+   CI retries
+3. **Warn about visibility after first push** — it's the most common
+   silent-failure for new taps
+4. **Verify after push** by fetching the index and blob back (see above)
+5. **Test the real thing**: `brew install` from a scratch tap is the only
+   proof; the manifest structure has multiple independently-fatal details

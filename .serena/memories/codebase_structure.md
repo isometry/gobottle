@@ -1,75 +1,39 @@
-# gobottle - Codebase Structure
+# gobottle - Codebase Structure (post-overhaul, v0.1.0)
 
 ```
 gobottle/
-├── main.go                 # Entry point, calls cmd.Execute()
-├── go.mod / go.sum         # Go module definition
-├── .goreleaser.yml         # GoReleaser configuration
+├── main.go                 # Entry point; exit code 2 for validation errors
+├── .gobottle.yaml          # Dogfood config (new formula: section schema)
 │
-├── cmd/                    # CLI commands (cobra)
-│   ├── root.go             # Root command, global flags (--dry-run, --config)
-│   ├── bottle.go           # Main `bottle` subcommand
-│   ├── init.go             # `init` subcommand (generate .gobottle.yaml)
-│   ├── platforms.go        # `platforms` subcommand
-│   ├── version.go          # `version` subcommand
-│   ├── completion.go       # Shell completion
-│   └── *_test.go           # Command tests
+├── cmd/                    # Thin cobra verbs
+│   ├── root.go             # Global flags (--config, --log-level, --dry-run), GOBOTTLE_* env setup
+│   ├── build.go            # `build`: compile/collect -> bottles + bottles.json (runBuild)
+│   ├── push.go             # `push`: manifest -> OCI index per version on GHCR (runPush)
+│   ├── release.go          # `release`: formula generation + tap commit; one-shot pipeline (runRelease)
+│   ├── common.go           # bindFlags (RunE-time viper binding!), loadConfig, formulaModel
+│   ├── manifest.go         # bottles.json schema (schemaVersion 1) + read/write helpers
+│   ├── init.go, platforms.go, version.go, completion.go
 │
-├── internal/               # Internal packages
-│   ├── artifact/           # Artifact sources (GitHub releases, local dist/)
-│   │   ├── artifact.go     # Artifact interface and types
-│   │   ├── github.go       # GitHub release source
-│   │   └── local.go        # Local dist/ source
-│   │
-│   ├── bottle/             # Bottle building
-│   │   ├── bottle.go       # Bottle struct
-│   │   └── builder.go      # Bottle builder
-│   │
-│   ├── config/             # Configuration
-│   │   ├── config.go       # Config struct, validation, git defaults
-│   │   └── config_test.go  # Config tests
-│   │
-│   ├── formula/            # Homebrew formula handling
-│   │   ├── formula.go      # Formula struct
-│   │   ├── generator.go    # Formula generation
-│   │   └── parser.go       # Formula parsing
-│   │
-│   ├── git/                # Git operations (go-git based)
-│   │   ├── git.go          # Repository wrapper (Open, GetLatestTag, IsClean, etc.)
-│   │   ├── semver.go       # Semver validation (IsValidSemver, ParseVersion)
-│   │   ├── url.go          # URL parsing (ParseRemoteURL)
-│   │   └── git_test.go     # Tests
-│   │
-│   ├── oci/                # OCI registry operations
-│   │   ├── auth.go         # Authentication
-│   │   └── pusher.go       # Push bottles to registry
-│   │
-│   ├── platform/           # Homebrew platform discovery
-│   │   ├── platform.go     # Platform types
-│   │   ├── discover.go     # Platform discovery from Homebrew source
-│   │   └── cache.go        # Platform cache
-│   │
-│   ├── tap/                # Tap repository updates
-│   │   └── updater.go      # Update formula in tap repo
-│   │
-│   └── util/               # Utilities
-│       ├── archive.go      # Archive handling
-│       └── hash.go         # Hashing utilities
-│
-└── testdata/               # Test fixtures
+├── internal/
+│   ├── artifact/           # Sources: go.go (flagship ko-like builder), local.go (dist/), github.go
+│   ├── bottle/             # builder.go, archive.go (deterministic tar.gz), tab.go, bottle.go
+│   ├── config/             # config.go (Config + FormulaConfig schema), load.go (viper.Unmarshal + hooks)
+│   ├── formula/            # formula.go (full model), generator.go (template, conditional stanzas)
+│   ├── git/                # go-git helpers (owner/repo, tags, HEAD commit)
+│   ├── oci/                # pusher.go (Publisher: brew-exact OCI indexes), layer.go, auth.go
+│   ├── platform/           # Homebrew platform discovery + cache (oldest-macOS-per-arch strategy)
+│   ├── tap/                # GitHub Contents API updater (returns commit SHA)
+│   └── util/               # ExtractTarGz, sha256 helpers
 ```
 
-## Package Responsibilities
+## Key invariants (verified against Homebrew source)
+- root_url NEVER contains the formula name (brew appends it); image = <host>/<root_path>/<formula>
+- always push an OCI *index* tagged version[-rebuild], children annotated with
+  sh.brew.bottle.digest, sh.brew.tab, org.opencontainers.image.ref.name=version.tag[.rebuild]
+- layer digest == bottle tar.gz sha256 (bottleLayer keeps bytes exact)
+- bottles are deterministic (sorted tar entries, zeroed owners, SOURCE_DATE_EPOCH)
+- flag->viper binding happens in RunE (bindFlags), NOT at command construction
 
-| Package | Responsibility |
-|---------|---------------|
-| `cmd` | CLI interface, flag parsing, command orchestration |
-| `internal/artifact` | Fetch artifacts from GitHub or local filesystem |
-| `internal/bottle` | Build bottle tarballs with correct structure |
-| `internal/config` | Configuration loading, validation, git defaults |
-| `internal/formula` | Parse and generate Homebrew formulas |
-| `internal/git` | Git operations via go-git (no shell exec) |
-| `internal/oci` | Push bottles to OCI registries (GHCR) |
-| `internal/platform` | Discover Homebrew platforms |
-| `internal/tap` | Update tap repository with new bottle info |
-| `internal/util` | Shared utilities (archive, hash) |
+## Verb pipeline
+`gobottle build -o json | gobottle push -o json | gobottle release` or one-shot `gobottle release`.
+JSON on stdout, progress on stderr. bottles.json is the contract between stages.
