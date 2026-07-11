@@ -19,12 +19,12 @@ machine can bottle for every platform Homebrew supports.
 ```sh
 gobottle build   -o json > bottles.json   # cross-compile + package bottles
 gobottle push    -o json < bottles.json   # publish OCI index + blobs to GHCR
-gobottle release          < bottles.json  # generate formula, commit to tap
+gobottle release -i bottles.json          # generate formula, commit to tap
 ```
 
 Each verb emits machine-readable JSON on stdout (progress on stderr), so the
-stages compose in CI; `gobottle release --all` runs the whole pipeline in one
-shot.
+stages compose in CI; `gobottle release` without `-i` runs the whole pipeline
+in one shot.
 
 Configuration lives in `.gobottle.yaml` (see `gobottle init`); the formula is
 fully generated — description, license, dependencies, caveats, completions,

@@ -42,7 +42,7 @@ dependencies, caveats, test block etc. are driven by the formula: section of
   gobottle release --source go --packages .
 
   # staged: release previously pushed bottles
-  gobottle push -o json < bottles.json | gobottle release
+  gobottle push -o json < bottles.json | gobottle release -i -
 
   # iterate on formula content without touching anything
   gobottle release --dry-run`,
@@ -69,9 +69,9 @@ dependencies, caveats, test block etc. are driven by the formula: section of
 				}
 			}
 
-			// Obtain a manifest: from input, or by running the pipeline.
+			// Obtain a manifest: from --input, or by running the pipeline.
 			var manifest *Manifest
-			if input != "" || stdinIsPiped() {
+			if input != "" {
 				if manifest, err = readManifest(input); err != nil {
 					return err
 				}
@@ -96,17 +96,12 @@ dependencies, caveats, test block etc. are driven by the formula: section of
 	}
 
 	addBuildFlags(cmd)
-	cmd.Flags().StringVarP(&input, "input", "i", "", "bottles.json manifest of already-pushed bottles (default: stdin if piped)")
+	cmd.Flags().StringVarP(&input, "input", "i", "", "bottles.json manifest of already-pushed bottles ('-' reads stdin)")
 	cmd.Flags().StringVar(&outputDir, "output-dir", "bottles", "directory for bottles and manifest (one-shot mode)")
 	cmd.Flags().StringVar(&tapPath, "tap-path", "", "write the formula into this local tap checkout instead of committing via the GitHub API")
 	cmd.Flags().StringVarP(&output, "output", "o", "text", "output format: 'text' or 'json'")
 
 	return cmd
-}
-
-func stdinIsPiped() bool {
-	stat, err := os.Stdin.Stat()
-	return err == nil && (stat.Mode()&os.ModeCharDevice) == 0
 }
 
 // runRelease renders the final formula (with bottle block) and delivers it
