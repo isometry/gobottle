@@ -22,7 +22,7 @@ func TestGenerateFull(t *testing.T) {
 		},
 		Dependencies: []string{"git"},
 		Conflicts:    []string{"other-tool"},
-		Binaries:     []string{"my-tool"},
+		Binaries:     []BinaryInstall{{Name: "my-tool", InstallPath: "bin"}},
 		Completions:  true,
 		Caveats:      "Remember to breathe.",
 		Test:         Test{Command: []string{"version"}},
@@ -77,7 +77,7 @@ func TestGenerateMinimal(t *testing.T) {
 	f := &Formula{
 		Name:     "tool",
 		URL:      "https://example.com/tool-1.0.0.tar.gz",
-		Binaries: []string{"tool"},
+		Binaries: []BinaryInstall{{Name: "tool"}},
 	}
 
 	got, err := Generate(f, "")
@@ -104,8 +104,62 @@ func TestGenerateNoBinaries(t *testing.T) {
 	}
 }
 
+func TestGenerateInstallPaths(t *testing.T) {
+	f := &Formula{
+		Name:     "tool",
+		URL:      "https://example.com/tool-1.0.0.tar.gz",
+		Binaries: []BinaryInstall{
+			{Name: "tool", InstallPath: "bin"},
+			{Name: "helper", InstallPath: "libexec"},
+			{Name: "plugin", InstallPath: "share/tool/plugins"},
+		},
+		Completions: true,
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	for _, required := range []string{
+		`    bin.install "tool"`,
+		`    libexec.install "helper"`,
+		`    (prefix/"share/tool/plugins").install "plugin"`,
+		`    generate_completions_from_executable(bin/"tool", "completion")`,
+		`    system bin/"tool", "--version"`,
+	} {
+		if !strings.Contains(got, required) {
+			t.Errorf("formula missing %q:\n%s", required, got)
+		}
+	}
+	for _, forbidden := range []string{
+		`generate_completions_from_executable(bin/"helper"`,
+		`generate_completions_from_executable(bin/"plugin"`,
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("completions generated for non-bin binary %q:\n%s", forbidden, got)
+		}
+	}
+}
+
+func TestGenerateNoBinBinaryDefaultTest(t *testing.T) {
+	f := &Formula{
+		Name:     "tool",
+		URL:      "https://example.com/tool-1.0.0.tar.gz",
+		Binaries: []BinaryInstall{{Name: "helper", InstallPath: "libexec"}},
+	}
+	if _, err := Generate(f, ""); err == nil {
+		t.Fatal("expected error: default test with no bin-installed binary")
+	}
+
+	f.Test.Raw = `assert_match "ok", shell_output(libexec/"helper")`
+	if _, err := Generate(f, ""); err != nil {
+		t.Fatalf("raw test should allow libexec-only formula: %v", err)
+	}
+}
+
 func TestGenerateCustomTemplate(t *testing.T) {
-	f := &Formula{Name: "x", URL: "u", Binaries: []string{"x"}}
+	f := &Formula{Name: "x", URL: "u", Binaries: []BinaryInstall{{Name: "x"}}}
 	got, err := Generate(f, "# custom {{ .Name }}\n")
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
@@ -119,7 +173,7 @@ func TestGenerateRawTest(t *testing.T) {
 	f := &Formula{
 		Name:     "x",
 		URL:      "u",
-		Binaries: []string{"x"},
+		Binaries: []BinaryInstall{{Name: "x"}},
 		Test:     Test{Raw: "assert_match \"x\", shell_output(bin/\"x --help\")"},
 	}
 	got, err := Generate(f, "")

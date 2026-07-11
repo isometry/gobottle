@@ -19,14 +19,34 @@ type Formula struct {
 	Bottles []BottleSpec // one line per platform
 
 	// Body
-	Dependencies []string // depends_on lines
-	Conflicts    []string // conflicts_with lines
-	Binaries     []string // bin.install lines (first binary drives the default test)
-	Completions  bool     // generate_completions_from_executable for each binary
+	Dependencies []string        // depends_on lines
+	Conflicts    []string        // conflicts_with lines
+	Binaries     []BinaryInstall // install lines (first bin-installed binary drives the default test)
+	Completions  bool            // generate_completions_from_executable for each bin-installed binary
 	ExtraInstall []string // verbatim extra install lines
 	Caveats      string   // literal caveats text
 	Service      string   // verbatim service block body
 	Test         Test     // test block (defaults to `system bin/"<bin>", "--version"`)
+}
+
+// BinaryInstall names a binary and the keg-relative directory it installs
+// into (empty means "bin").
+type BinaryInstall struct {
+	Name        string
+	InstallPath string
+}
+
+// BinBinaries returns the names of the binaries installed into bin; only
+// these are runnable from PATH, so they drive the default test and
+// completion generation.
+func (f *Formula) BinBinaries() []string {
+	var names []string
+	for _, b := range f.Binaries {
+		if b.InstallPath == "bin" {
+			names = append(names, b.Name)
+		}
+	}
+	return names
 }
 
 // BottleSpec represents one sha256 line in the bottle block.

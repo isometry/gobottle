@@ -19,13 +19,20 @@ type Builder struct {
 	seq     int
 }
 
+// BinaryInstall names a binary and the keg-relative directory it installs
+// into (empty means "bin").
+type BinaryInstall struct {
+	Name        string
+	InstallPath string
+}
+
 // BuildOptions contains the parameters for building a bottle
 type BuildOptions struct {
 	Formula      string
 	Version      string
 	Platform     platform.Platform
-	ArtifactPath string   // Path to archive containing the binaries
-	Binaries     []string // Binary names to include
+	ArtifactPath string          // Path to archive containing the binaries
+	Binaries     []BinaryInstall // Binaries to include
 	Cellar       string
 	Rebuild      int
 	Tap          string // Tap name for INSTALL_RECEIPT.json (e.g., "user/homebrew-tap")
@@ -76,12 +83,18 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	keg := path.Join(opts.Formula, opts.Version)
 	files := make(map[string]string)
 
+	binaryNames := make([]string, 0, len(opts.Binaries))
 	for _, binary := range opts.Binaries {
-		srcPath := filepath.Join(extractDir, binary)
+		srcPath := filepath.Join(extractDir, binary.Name)
 		if _, err := os.Stat(srcPath); err != nil {
-			return nil, fmt.Errorf("binary %s not found in artifact: %w", binary, err)
+			return nil, fmt.Errorf("binary %s not found in artifact: %w", binary.Name, err)
 		}
-		files[path.Join(keg, "bin", binary)] = srcPath
+		installPath := binary.InstallPath
+		if installPath == "" {
+			installPath = "bin"
+		}
+		files[path.Join(keg, installPath, binary.Name)] = srcPath
+		binaryNames = append(binaryNames, binary.Name)
 	}
 
 	// .brew/<formula>.rb: the real formula source (without bottle block) so
@@ -143,7 +156,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		UncompressedSHA256: res.UncompressedSHA256,
 		UncompressedSize:   res.UncompressedSize,
 		Path:               bottlePath,
-		Binaries:           opts.Binaries,
+		Binaries:           binaryNames,
 		Cellar:             opts.Cellar,
 		Rebuild:            opts.Rebuild,
 		Tab:                tab,

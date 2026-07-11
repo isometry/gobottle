@@ -121,6 +121,15 @@ is the input to 'gobottle push' and 'gobottle release'.`,
 	return cmd
 }
 
+// bottleBinaries maps the configured binaries onto the bottle staging model.
+func bottleBinaries(cfg *config.Config) []bottle.BinaryInstall {
+	out := make([]bottle.BinaryInstall, len(cfg.Binaries))
+	for i, b := range cfg.Binaries {
+		out[i] = bottle.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath}
+	}
+	return out
+}
+
 // runBuild executes the build stage and returns the manifest.
 // Shared by `build` and one-shot `release`.
 func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manifest, error) {
@@ -224,7 +233,7 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 				Version:      cfg.Version,
 				Platform:     plat,
 				ArtifactPath: artPath,
-				Binaries:     cfg.BinaryNames(),
+				Binaries:     bottleBinaries(cfg),
 				Cellar:       cfg.Bottle.Cellar,
 				Rebuild:      cfg.Bottle.Rebuild,
 				Tap:          fmt.Sprintf("%s/%s", cfg.Tap.Owner, cfg.Tap.Repo),

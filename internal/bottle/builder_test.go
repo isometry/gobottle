@@ -55,7 +55,7 @@ func testBuildOptions(artifact string) BuildOptions {
 		Version:      "1.2.3",
 		Platform:     platform.Platform{Tag: "arm64_sonoma", OS: "darwin", Arch: "arm64", OSVersion: "sonoma", OSVersionMajor: 14},
 		ArtifactPath: artifact,
-		Binaries:     []string{"mytool"},
+		Binaries:     []BinaryInstall{{Name: "mytool", InstallPath: "bin"}},
 		Cellar:       ":any_skip_relocation",
 		Tap:          "acme/homebrew-tap",
 		FormulaRb:    "class Mytool < Formula\nend\n",
@@ -122,6 +122,27 @@ func TestBuildContents(t *testing.T) {
 	for _, want := range []string{`"built_as_bottle":true`, `"tap":"acme/homebrew-tap"`, `"stable":"1.2.3"`} {
 		if !strings.Contains(receipt, want) {
 			t.Errorf("receipt missing %s: %s", want, receipt)
+		}
+	}
+}
+
+func TestBuildInstallPaths(t *testing.T) {
+	artifact := makeArtifact(t, "mytool", "helper")
+	opts := testBuildOptions(artifact)
+	opts.Binaries = []BinaryInstall{
+		{Name: "mytool"}, // empty InstallPath defaults to bin
+		{Name: "helper", InstallPath: "libexec"},
+	}
+
+	b := buildOnce(t, opts)
+
+	entries := readTarGz(t, b.Path)
+	for _, want := range []string{
+		"mytool/1.2.3/bin/mytool",
+		"mytool/1.2.3/libexec/helper",
+	} {
+		if _, ok := entries[want]; !ok {
+			t.Errorf("bottle missing entry %s (have %v)", want, keys(entries))
 		}
 	}
 }

@@ -53,10 +53,16 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 
   def install
 {{- range .Binaries }}
-    bin.install {{ quote . }}
+{{- if eq .InstallPath "bin" }}
+    bin.install {{ quote .Name }}
+{{- else if eq .InstallPath "libexec" }}
+    libexec.install {{ quote .Name }}
+{{- else }}
+    (prefix/{{ quote .InstallPath }}).install {{ quote .Name }}
+{{- end }}
 {{- end }}
 {{- if .Completions }}
-{{- range .Binaries }}
+{{- range .BinBinaries }}
     generate_completions_from_executable(bin/{{ quote . }}, "completion")
 {{- end }}
 {{- end }}
@@ -83,7 +89,7 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- if .Test.Raw }}
 {{ indentBlock .Test.Raw }}
 {{- else }}
-    system bin/{{ quote (index .Binaries 0) }}{{ range .Test.Command }}, {{ quote . }}{{ end }}
+    system bin/{{ quote (index .BinBinaries 0) }}{{ range .Test.Command }}, {{ quote . }}{{ end }}
 {{- end }}
   end
 end
@@ -115,6 +121,14 @@ func Generate(f *Formula, tmplText string) (string, error) {
 	}
 	if len(f.Binaries) == 0 {
 		return "", fmt.Errorf("formula %s: at least one binary is required", f.Name)
+	}
+	for i := range f.Binaries {
+		if f.Binaries[i].InstallPath == "" {
+			f.Binaries[i].InstallPath = "bin"
+		}
+	}
+	if f.Test.Raw == "" && len(f.BinBinaries()) == 0 {
+		return "", fmt.Errorf("formula %s: the default test requires a bin-installed binary; set an explicit test", f.Name)
 	}
 	if f.URL == "" && f.Head == nil {
 		return "", fmt.Errorf("formula %s: a source url (or head) is required", f.Name)

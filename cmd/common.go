@@ -76,6 +76,15 @@ func resolveSourceDate() time.Time {
 	return time.Unix(0, 0).UTC()
 }
 
+// formulaBinaries maps the configured binaries onto the formula model.
+func formulaBinaries(cfg *config.Config) []formula.BinaryInstall {
+	out := make([]formula.BinaryInstall, len(cfg.Binaries))
+	for i, b := range cfg.Binaries {
+		out[i] = formula.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath}
+	}
+	return out
+}
+
 // formulaModel maps the formula config onto the generator model.
 // The URL/SHA256 come from source config and may be empty at build time.
 func formulaModel(cfg *config.Config) (*formula.Formula, string, error) {
@@ -87,7 +96,7 @@ func formulaModel(cfg *config.Config) (*formula.Formula, string, error) {
 		URL:          cfg.SourceURL(),
 		SHA256:       cfg.Source.SHA256,
 		License:      f.License,
-		Binaries:     cfg.BinaryNames(),
+		Binaries:     formulaBinaries(cfg),
 		Dependencies: f.Dependencies,
 		Conflicts:    f.Conflicts,
 		Caveats:      f.Caveats,

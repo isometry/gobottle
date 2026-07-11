@@ -49,7 +49,7 @@ func makeBottle(t *testing.T, plat platform.Platform, rebuild int) *bottle.Bottl
 		Version:      "1.2.3",
 		Platform:     plat,
 		ArtifactPath: artifact,
-		Binaries:     []string{"mytool"},
+		Binaries:     []bottle.BinaryInstall{{Name: "mytool", InstallPath: "bin"}},
 		Cellar:       ":any_skip_relocation",
 		Rebuild:      rebuild,
 		Tap:          "acme/homebrew-tap",
