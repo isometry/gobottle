@@ -3,13 +3,17 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 
+	"github.com/isometry/gobottle/internal/artifact"
 	"github.com/isometry/gobottle/internal/bottle"
 	"github.com/isometry/gobottle/internal/config"
 	"github.com/isometry/gobottle/internal/formula"
 	"github.com/isometry/gobottle/internal/platform"
+	"github.com/isometry/gobottle/internal/util"
 	"github.com/spf13/cobra"
 )
 
@@ -130,6 +134,59 @@ func bottleBinaries(cfg *config.Config) []bottle.BinaryInstall {
 	return out
 }
 
+// findHostArtifact returns the artifact runnable on this machine, or nil.
+// On Apple Silicon a darwin/amd64 artifact is an acceptable Rosetta fallback
+// when no exact match exists.
+func findHostArtifact(artifacts []artifact.Artifact) *artifact.Artifact {
+	for i := range artifacts {
+		if artifacts[i].OS == runtime.GOOS && artifacts[i].Arch == runtime.GOARCH {
+			return &artifacts[i]
+		}
+	}
+	if runtime.GOOS == "darwin" && runtime.GOARCH == "arm64" {
+		for i := range artifacts {
+			if artifacts[i].OS == "darwin" && artifacts[i].Arch == "amd64" {
+				return &artifacts[i]
+			}
+		}
+	}
+	return nil
+}
+
+// generateCompletions runs the completion command of a host-runnable build of
+// each bin-installed binary, returning keg-relative archive path -> local
+// path entries (under workDir) for inclusion in every platform's bottle.
+// Returns nil (with a warning) when no artifact can run on this machine.
+func generateCompletions(ctx context.Context, cfg *config.Config, source artifact.Source, artifacts []artifact.Artifact, workDir string) (map[string]string, error) {
+	host := findHostArtifact(artifacts)
+	if host == nil {
+		warn("no artifact runs on %s/%s - bottles will not include shell completions", runtime.GOOS, runtime.GOARCH)
+		return nil, nil
+	}
+
+	archivePath, err := source.Fetch(ctx, *host, workDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch artifact %s for completions: %w", host.Name, err)
+	}
+	extractDir := filepath.Join(workDir, "extract")
+	if err := util.ExtractTarGz(archivePath, extractDir); err != nil {
+		return nil, fmt.Errorf("failed to extract artifact for completions: %w", err)
+	}
+
+	files := map[string]string{}
+	for _, b := range cfg.Binaries {
+		if b.InstallPath != "bin" {
+			continue
+		}
+		entries, err := bottle.GenerateCompletions(ctx, filepath.Join(extractDir, b.Name), cfg.Formula.Install.CompletionsCommand, workDir)
+		if err != nil {
+			return nil, err
+		}
+		maps.Copy(files, entries)
+	}
+	return files, nil
+}
+
 // runBuild executes the build stage and returns the manifest.
 // Shared by `build` and one-shot `release`.
 func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manifest, error) {
@@ -208,6 +265,23 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 
 	sourceDate := resolveSourceDate()
 
+	// Completions are generated once from a host-runnable binary (cobra
+	// output is platform-independent) and shipped in every bottle: brew
+	// never runs def install when pouring.
+	var extraFiles map[string]string
+	if cfg.Formula.Install.Completions {
+		completionsDir, err := os.MkdirTemp("", "gobottle-completions-*")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create completions directory: %w", err)
+		}
+		defer func() { _ = os.RemoveAll(completionsDir) }()
+
+		extraFiles, err = generateCompletions(ctx, cfg, source, artifacts, completionsDir)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	for _, art := range artifacts {
 		platforms := platformInfo.GetPlatformsForOS(art.OS, art.Arch)
 		platforms = platform.FilterPlatforms(platforms, cfg.Bottle.Platforms, cfg.Bottle.ExcludePlatforms)
@@ -238,6 +312,7 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 				Rebuild:      cfg.Bottle.Rebuild,
 				Tap:          fmt.Sprintf("%s/%s", cfg.Tap.Owner, cfg.Tap.Repo),
 				FormulaRb:    embeddedRb,
+				ExtraFiles:   extraFiles,
 				SourceDate:   sourceDate,
 				OutputDir:    outputDir,
 			})

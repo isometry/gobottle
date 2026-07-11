@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/name"
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/registry"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 	"github.com/isometry/gobottle/internal/bottle"
@@ -268,10 +268,10 @@ func TestPushKeepOld(t *testing.T) {
 
 func TestImageFormulaName(t *testing.T) {
 	for in, want := range map[string]string{
-		"mytool":    "mytool",
-		"go@1.22":   "go/1.22",
-		"libc++":    "libcxx",
-		"a@b+c":     "a/bxc",
+		"mytool":  "mytool",
+		"go@1.22": "go/1.22",
+		"libc++":  "libcxx",
+		"a@b+c":   "a/bxc",
 	} {
 		if got := ImageFormulaName(in); got != want {
 			t.Errorf("ImageFormulaName(%q) = %q, want %q", in, got, want)

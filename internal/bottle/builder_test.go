@@ -147,6 +147,28 @@ func TestBuildInstallPaths(t *testing.T) {
 	}
 }
 
+func TestBuildExtraFiles(t *testing.T) {
+	artifact := makeArtifact(t, "mytool")
+	opts := testBuildOptions(artifact)
+
+	comp := filepath.Join(t.TempDir(), "mytool.bash")
+	if err := os.WriteFile(comp, []byte("completion-for-bash\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	opts.ExtraFiles = map[string]string{"etc/bash_completion.d/mytool": comp}
+
+	b1 := buildOnce(t, opts)
+	entries := readTarGz(t, b1.Path)
+	if got := entries["mytool/1.2.3/etc/bash_completion.d/mytool"]; got != "completion-for-bash\n" {
+		t.Errorf("extra file content = %q (have %v)", got, keys(entries))
+	}
+
+	b2 := buildOnce(t, opts)
+	if b1.SHA256 != b2.SHA256 {
+		t.Errorf("bottle with extra files not deterministic: %s vs %s", b1.SHA256, b2.SHA256)
+	}
+}
+
 func TestBuildRebuildNaming(t *testing.T) {
 	artifact := makeArtifact(t, "mytool")
 	opts := testBuildOptions(artifact)

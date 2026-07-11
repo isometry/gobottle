@@ -84,6 +84,11 @@ type InstallConfig struct {
 	// Completions emits generate_completions_from_executable for each binary
 	Completions bool `mapstructure:"completions"`
 
+	// CompletionsCommand is the subcommand generating completion scripts,
+	// invoked as `<binary> <command...> <shell>` (default: ["completion"],
+	// the cobra convention)
+	CompletionsCommand []string `mapstructure:"completions_command"`
+
 	// Extra lines are appended verbatim to the install block
 	Extra []string `mapstructure:"extra"`
 }
@@ -275,6 +280,11 @@ func (c *Config) SetDefaults() {
 		if c.Binaries[i].InstallPath == "" {
 			c.Binaries[i].InstallPath = "bin"
 		}
+	}
+
+	// Default completion-generating subcommand (cobra convention)
+	if len(c.Formula.Install.CompletionsCommand) == 0 {
+		c.Formula.Install.CompletionsCommand = []string{"completion"}
 	}
 
 	// Use registry token for tap if not specified

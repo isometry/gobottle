@@ -106,8 +106,8 @@ func TestGenerateNoBinaries(t *testing.T) {
 
 func TestGenerateInstallPaths(t *testing.T) {
 	f := &Formula{
-		Name:     "tool",
-		URL:      "https://example.com/tool-1.0.0.tar.gz",
+		Name: "tool",
+		URL:  "https://example.com/tool-1.0.0.tar.gz",
 		Binaries: []BinaryInstall{
 			{Name: "tool", InstallPath: "bin"},
 			{Name: "helper", InstallPath: "libexec"},

@@ -35,8 +35,9 @@ type BuildOptions struct {
 	Binaries     []BinaryInstall // Binaries to include
 	Cellar       string
 	Rebuild      int
-	Tap          string // Tap name for INSTALL_RECEIPT.json (e.g., "user/homebrew-tap")
-	FormulaRb    string // Rendered formula source (sans bottle block) for .brew/<formula>.rb
+	Tap          string            // Tap name for INSTALL_RECEIPT.json (e.g., "user/homebrew-tap")
+	FormulaRb    string            // Rendered formula source (sans bottle block) for .brew/<formula>.rb
+	ExtraFiles   map[string]string // Keg-relative archive path -> local path (e.g. completions)
 	SourceDate   time.Time
 	OutputDir    string // Where to write the bottle (default: builder temp dir, removed on Close)
 }
@@ -95,6 +96,10 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		}
 		files[path.Join(keg, installPath, binary.Name)] = srcPath
 		binaryNames = append(binaryNames, binary.Name)
+	}
+
+	for archivePath, localPath := range opts.ExtraFiles {
+		files[path.Join(keg, archivePath)] = localPath
 	}
 
 	// .brew/<formula>.rb: the real formula source (without bottle block) so

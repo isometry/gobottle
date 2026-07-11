@@ -23,10 +23,10 @@ type Formula struct {
 	Conflicts    []string        // conflicts_with lines
 	Binaries     []BinaryInstall // install lines (first bin-installed binary drives the default test)
 	Completions  bool            // generate_completions_from_executable for each bin-installed binary
-	ExtraInstall []string // verbatim extra install lines
-	Caveats      string   // literal caveats text
-	Service      string   // verbatim service block body
-	Test         Test     // test block (defaults to `system bin/"<bin>", "--version"`)
+	ExtraInstall []string        // verbatim extra install lines
+	Caveats      string          // literal caveats text
+	Service      string          // verbatim service block body
+	Test         Test            // test block (defaults to `system bin/"<bin>", "--version"`)
 }
 
 // BinaryInstall names a binary and the keg-relative directory it installs
