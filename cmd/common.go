@@ -3,6 +3,8 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"time"
 
 	"github.com/isometry/gobottle/internal/artifact"
 	"github.com/isometry/gobottle/internal/config"
@@ -54,6 +56,24 @@ func progress(format string, args ...any) {
 // warn writes a warning to stderr.
 func warn(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, "WARNING: "+format+"\n", args...)
+}
+
+// resolveSourceDate returns the reproducible build timestamp:
+// SOURCE_DATE_EPOCH > HEAD commit time > Unix epoch. Deriving the default
+// from the commit keeps consecutive builds of the same commit bit-identical
+// while still carrying a meaningful date.
+func resolveSourceDate() time.Time {
+	if epoch := os.Getenv("SOURCE_DATE_EPOCH"); epoch != "" {
+		if secs, err := strconv.ParseInt(epoch, 10, 64); err == nil {
+			return time.Unix(secs, 0).UTC()
+		}
+	}
+	if repo, err := git.Open("."); err == nil {
+		if t, err := repo.GetHeadCommitTime(); err == nil {
+			return t.UTC()
+		}
+	}
+	return time.Unix(0, 0).UTC()
 }
 
 // formulaModel maps the formula config onto the generator model.
@@ -153,6 +173,7 @@ func createGoSource(cfg *config.Config, targets []artifact.BuildTarget) (artifac
 		Version:    cfg.Version,
 		Commit:     commit,
 		Tag:        tag,
+		Date:       resolveSourceDate(),
 		Binaries:   cfg.BinaryNames(),
 		Targets:    targets,
 	})

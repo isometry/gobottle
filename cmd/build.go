@@ -197,6 +197,8 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 		},
 	}
 
+	sourceDate := resolveSourceDate()
+
 	for _, art := range artifacts {
 		platforms := platformInfo.GetPlatformsForOS(art.OS, art.Arch)
 		platforms = platform.FilterPlatforms(platforms, cfg.Bottle.Platforms, cfg.Bottle.ExcludePlatforms)
@@ -227,6 +229,7 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 				Rebuild:      cfg.Bottle.Rebuild,
 				Tap:          fmt.Sprintf("%s/%s", cfg.Tap.Owner, cfg.Tap.Repo),
 				FormulaRb:    embeddedRb,
+				SourceDate:   sourceDate,
 				OutputDir:    outputDir,
 			})
 			if err != nil {

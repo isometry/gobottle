@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/semver/v3"
 	"github.com/go-git/go-git/v5"
@@ -206,6 +207,19 @@ func (r *Repository) GetHeadCommit() (string, error) {
 		return "", fmt.Errorf("failed to get HEAD: %w", err)
 	}
 	return head.Hash().String(), nil
+}
+
+// GetHeadCommitTime returns the committer timestamp of the commit at HEAD.
+func (r *Repository) GetHeadCommitTime() (time.Time, error) {
+	head, err := r.repo.Head()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to get HEAD: %w", err)
+	}
+	commit, err := r.repo.CommitObject(head.Hash())
+	if err != nil {
+		return time.Time{}, fmt.Errorf("failed to get HEAD commit: %w", err)
+	}
+	return commit.Committer.When, nil
 }
 
 // IsClean returns true if the working tree has no uncommitted changes.

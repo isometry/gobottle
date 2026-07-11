@@ -1,8 +1,50 @@
 package git
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
+
+	gogit "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 )
+
+func TestGetHeadCommitTime(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := wt.Add("file.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	when := time.Date(2026, 7, 1, 12, 34, 56, 0, time.UTC)
+	sig := &object.Signature{Name: "Test", Email: "test@example.com", When: when}
+	if _, err := wt.Commit("initial", &gogit.CommitOptions{Author: sig, Committer: sig}); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	got, err := r.GetHeadCommitTime()
+	if err != nil {
+		t.Fatalf("GetHeadCommitTime: %v", err)
+	}
+	if !got.Equal(when) {
+		t.Errorf("GetHeadCommitTime = %v, want %v", got, when)
+	}
+}
 
 func TestParseRemoteURL(t *testing.T) {
 	tests := []struct {

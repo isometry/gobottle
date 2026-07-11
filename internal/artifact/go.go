@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"text/template"
 	"time"
@@ -191,10 +192,21 @@ func (s *GoSource) build(ctx context.Context) error {
 	}
 	close(artifactsChan)
 
-	// Collect artifacts
+	// Collect artifacts; completion order is nondeterministic, so sort to
+	// keep List (and everything derived from it, e.g. bottles.json) stable.
 	for artifact := range artifactsChan {
 		s.artifacts = append(s.artifacts, artifact)
 	}
+	sort.Slice(s.artifacts, func(i, j int) bool {
+		a, b := s.artifacts[i], s.artifacts[j]
+		if a.OS != b.OS {
+			return a.OS < b.OS
+		}
+		if a.Arch != b.Arch {
+			return a.Arch < b.Arch
+		}
+		return a.Name < b.Name
+	})
 
 	return nil
 }
