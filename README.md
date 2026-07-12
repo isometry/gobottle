@@ -31,12 +31,33 @@ fully generated — description, license, dependencies, caveats, completions,
 test block and more are driven from the `formula:` section of the config,
 with a Go-template escape hatch for anything not yet modeled.
 
+## Installation
+
+```sh
+brew install isometry/tap/gobottle    # poured as a bottle, naturally
+go install github.com/isometry/gobottle@latest
+```
+
+In GitHub Actions, use
+[isometry/gobottle-setup](https://github.com/isometry/gobottle-setup) to
+install from verified release binaries.
+
 ## Requirements
 
 - Go toolchain (for `--source=go` builds)
 - A GitHub token with `write:packages` (GHCR) and `contents: write` (tap)
 - After the first push, flip the GHCR package visibility to **public** so
   `brew`'s anonymous pulls work
+
+## Claude Code plugin
+
+This repository doubles as a Claude Code plugin providing a `gobottle`
+skill (usage, configuration reference, and a goreleaser-migration guide):
+
+```
+/plugin marketplace add isometry/gobottle
+/plugin install gobottle@gobottle
+```
 
 ## License
 

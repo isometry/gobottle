@@ -30,6 +30,13 @@ completions land in the keg (and get linked automatically), `brew test`
 works, and the bottle block pins per-platform SHA256s for integrity. See
 [Migrating from goreleaser](#migrating-from-goreleaser-brews) below.
 
+## Installing gobottle
+
+- Locally: `brew install isometry/tap/gobottle` (poured as a bottle,
+  naturally) or `go install github.com/isometry/gobottle@latest`.
+- In GitHub Actions: the `isometry/gobottle-setup` action — see
+  [CI with gobottle-setup](#ci-with-gobottle-setup).
+
 ## Quickstart
 
 `.gobottle.yaml` in the repo root (`gobottle init` scaffolds one):
