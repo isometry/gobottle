@@ -45,7 +45,9 @@ jobs:
             dist/*_SHA256SUMS
 
       - name: Publish bottles
-        run: go run . release
+        # Bottle the archives goreleaser just built (and attested) instead
+        # of recompiling: bottles carry the exact release binaries.
+        run: go run . release --source local
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOBOTTLE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

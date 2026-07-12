@@ -193,11 +193,29 @@ func (s *LocalSource) loadChecksums() error {
 		}
 	}
 
-	// If no checksums file found, try individual .sha256 files
 	entries, err := os.ReadDir(s.distPath)
 	if err != nil {
 		return err
 	}
+
+	// Versioned manifests next: goreleaser's conventional checksum template
+	// is "<name>_<version>_SHA256SUMS" (os.ReadDir returns sorted entries,
+	// so the pick is deterministic).
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		lower := strings.ToLower(entry.Name())
+		if strings.HasSuffix(lower, "sha256sums") ||
+			(strings.HasPrefix(lower, "checksums") && strings.HasSuffix(lower, ".txt")) {
+			if content, err := os.ReadFile(filepath.Join(s.distPath, entry.Name())); err == nil {
+				s.checksums = ParseChecksumsFile(string(content))
+				return nil
+			}
+		}
+	}
+
+	// If no checksums file found, try individual .sha256 files
 
 	for _, entry := range entries {
 		if entry.IsDir() {
