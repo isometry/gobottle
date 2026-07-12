@@ -1,0 +1,39 @@
+---
+version: 2
+updates:
+  # Go modules: security updates only (version updates disabled).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: daily
+    open-pull-requests-limit: 0
+    # NOTE: dependabot applies cooldown to version updates only; security
+    # updates bypass it by design. Kept for self-documentation should
+    # version updates ever be re-enabled.
+    cooldown:
+      default-days: 3
+    groups:
+      go-security:
+        applies-to: security-updates
+        patterns: ["*"]
+
+  # GitHub Actions: full version updates, grouped per provider so each
+  # owner's actions land as one PR, plus grouped security updates.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily
+    cooldown:
+      default-days: 3
+    groups:
+      actions-official:
+        patterns: ["actions/*"]
+      github:
+        patterns: ["github/*"]
+      goreleaser:
+        patterns: ["goreleaser/*"]
+      other:
+        patterns: ["*"]
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
