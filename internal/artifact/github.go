@@ -9,8 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/go-github/v68/github"
-	"golang.org/x/oauth2"
+	"github.com/google/go-github/v88/github"
 )
 
 // GitHubSource fetches artifacts from GitHub releases
@@ -45,16 +44,15 @@ func NewGitHubSource(cfg GitHubSourceConfig) (*GitHubSource, error) {
 		return nil, fmt.Errorf("tag is required")
 	}
 
-	// Create HTTP client with optional authentication
-	var httpClient *http.Client
+	// Authenticate when a token is provided (private repos, rate limits)
+	var opts []github.ClientOptionsFunc
 	if cfg.Token != "" {
-		ts := oauth2.StaticTokenSource(
-			&oauth2.Token{AccessToken: cfg.Token},
-		)
-		httpClient = oauth2.NewClient(context.Background(), ts)
+		opts = append(opts, github.WithAuthToken(cfg.Token))
 	}
-
-	client := github.NewClient(httpClient)
+	client, err := github.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GitHub client: %w", err)
+	}
 
 	// Create temp directory for downloads
 	tempDir, err := os.MkdirTemp("", "gobottle-github-*")

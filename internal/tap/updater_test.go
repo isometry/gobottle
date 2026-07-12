@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 
-	"github.com/google/go-github/v68/github"
+	"github.com/google/go-github/v88/github"
 )
 
 // newTestUpdater returns an Updater backed by an httptest GitHub API stub.
@@ -19,12 +18,10 @@ func newTestUpdater(t *testing.T, branch string, mux *http.ServeMux) *Updater {
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 
-	client := github.NewClient(nil)
-	base, err := url.Parse(srv.URL + "/")
+	client, err := github.NewClient(github.WithURLs(new(srv.URL+"/"), nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	client.BaseURL = base
 
 	return &Updater{client: client, owner: "acme", repo: "homebrew-tap", branch: branch}
 }

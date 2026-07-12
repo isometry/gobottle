@@ -187,7 +187,10 @@ func runRelease(ctx context.Context, cfg *config.Config, manifest *Manifest, tap
 	if tapToken == "" {
 		tapToken = viper.GetString("tap.token")
 	}
-	updater := tap.NewUpdater(tapToken, manifest.Tap.Owner, manifest.Tap.Repo, manifest.Tap.Branch)
+	updater, err := tap.NewUpdater(tapToken, manifest.Tap.Owner, manifest.Tap.Repo, manifest.Tap.Branch)
+	if err != nil {
+		return err
+	}
 	sha, err := updater.UpdateFormula(ctx, formulaPath, []byte(content), commitMsg)
 	if err != nil {
 		return fmt.Errorf("failed to commit formula: %w", err)

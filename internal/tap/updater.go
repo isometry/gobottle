@@ -4,8 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/go-github/v68/github"
-	"golang.org/x/oauth2"
+	"github.com/google/go-github/v88/github"
 )
 
 // Updater updates formulas in a Homebrew tap repository
@@ -17,16 +16,14 @@ type Updater struct {
 }
 
 // NewUpdater creates a new tap updater
-func NewUpdater(token, owner, repo, branch string) *Updater {
-	var client *github.Client
+func NewUpdater(token, owner, repo, branch string) (*Updater, error) {
+	var opts []github.ClientOptionsFunc
 	if token != "" {
-		ts := oauth2.StaticTokenSource(
-			&oauth2.Token{AccessToken: token},
-		)
-		tc := oauth2.NewClient(context.Background(), ts)
-		client = github.NewClient(tc)
-	} else {
-		client = github.NewClient(nil)
+		opts = append(opts, github.WithAuthToken(token))
+	}
+	client, err := github.NewClient(opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GitHub client: %w", err)
 	}
 
 	return &Updater{
@@ -34,7 +31,7 @@ func NewUpdater(token, owner, repo, branch string) *Updater {
 		owner:  owner,
 		repo:   repo,
 		branch: branch,
-	}
+	}, nil
 }
 
 // UpdateFormula creates or updates a formula file in the tap and returns the
