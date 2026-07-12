@@ -79,6 +79,8 @@ func TestPushIndexStructure(t *testing.T) {
 		SourceURL: "https://github.com/acme/homebrew-tap",
 		Homepage:  "https://acme.dev",
 		License:   "MIT",
+		FullName:  "acme/tap/mytool",
+		Vendor:    "acme",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +127,14 @@ func TestPushIndexStructure(t *testing.T) {
 	}
 	if manifest.Annotations["com.github.package.type"] != "homebrew_bottle" {
 		t.Error("index missing com.github.package.type=homebrew_bottle annotation")
+	}
+	// GHCR's package page renders the install snippet from the index title,
+	// which must be the tap-qualified formula full name (brew convention).
+	if got := manifest.Annotations["org.opencontainers.image.title"]; got != "acme/tap/mytool" {
+		t.Errorf("index title = %q, want tap-qualified %q", got, "acme/tap/mytool")
+	}
+	if got := manifest.Annotations["org.opencontainers.image.vendor"]; got != "acme" {
+		t.Errorf("index vendor = %q, want %q", got, "acme")
 	}
 
 	byRef := map[string]v1.Descriptor{}

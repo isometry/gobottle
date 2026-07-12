@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/isometry/gobottle/internal/oci"
 	"github.com/isometry/gobottle/internal/util"
@@ -115,6 +116,11 @@ func runPush(ctx context.Context, manifest *Manifest, token string, dryRun bool)
 			Homepage:    manifest.Homepage,
 			License:     manifest.License,
 			Description: manifest.Description,
+			// brew's formula_full_name: "<user>/<short tap>/<formula>" -
+			// GHCR renders it in the package page's install snippet
+			FullName: fmt.Sprintf("%s/%s/%s", manifest.Tap.Owner,
+				strings.TrimPrefix(manifest.Tap.Repo, "homebrew-"), manifest.Formula),
+			Vendor: manifest.Tap.Owner,
 		},
 	)
 	if err != nil {

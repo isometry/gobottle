@@ -35,9 +35,11 @@ import (
 // PublishOptions holds metadata rendered into OCI annotations.
 type PublishOptions struct {
 	SourceURL   string    // org.opencontainers.image.source (links the GHCR package to a repo)
-	Homepage    string    // org.opencontainers.image.url
+	Homepage    string    // org.opencontainers.image.url + org.opencontainers.image.documentation
 	License     string    // org.opencontainers.image.licenses + sh.brew.license
 	Description string    // org.opencontainers.image.description
+	FullName    string    // org.opencontainers.image.title: tap-qualified formula name, e.g. "user/tap/formula" (brew's formula_full_name; drives GHCR's install snippet)
+	Vendor      string    // org.opencontainers.image.vendor (the owning user/org)
 	Created     time.Time // org.opencontainers.image.created; zero omits it (keeps pushes deterministic)
 }
 
@@ -237,9 +239,14 @@ func (p *Publisher) bottleAnnotations(b *bottle.Bottle, fileSize int64) (map[str
 		return nil, fmt.Errorf("failed to marshal tab for %s: %w", b.BottleName(), err)
 	}
 
+	// Per-bottle title mirrors brew's "<formula_full_name> <platform tag>".
+	title := fmt.Sprintf("%s %s", b.Formula, b.Platform.Tag)
+	if p.opts.FullName != "" {
+		title = fmt.Sprintf("%s %s", p.opts.FullName, b.Platform.Tag)
+	}
 	annotations := map[string]string{
 		"org.opencontainers.image.ref.name":    b.RefName(),
-		"org.opencontainers.image.title":       b.BottleName(),
+		"org.opencontainers.image.title":       title,
 		"org.opencontainers.image.version":     b.Version,
 		"org.opencontainers.image.description": fmt.Sprintf("Homebrew bottle for %s %s (%s)", b.Formula, b.Version, b.Platform.Tag),
 		"sh.brew.bottle.digest":                b.SHA256,
@@ -251,12 +258,18 @@ func (p *Publisher) bottleAnnotations(b *bottle.Bottle, fileSize int64) (map[str
 	return annotations, nil
 }
 
-// indexAnnotations builds the index-level annotation set.
+// indexAnnotations builds the index-level annotation set, mirroring brew's
+// own uploads (github_packages.rb): the title is the tap-qualified formula
+// full name, which GHCR's package page renders in its install snippet.
 func (p *Publisher) indexAnnotations(tag string, sample *bottle.Bottle) map[string]string {
+	title := p.opts.FullName
+	if title == "" {
+		title = sample.Formula
+	}
 	annotations := map[string]string{
 		"com.github.package.type":              "homebrew_bottle",
 		"org.opencontainers.image.ref.name":    tag,
-		"org.opencontainers.image.title":       fmt.Sprintf("%s bottles", sample.Formula),
+		"org.opencontainers.image.title":       title,
 		"org.opencontainers.image.version":     sample.Version,
 		"org.opencontainers.image.description": fmt.Sprintf("Homebrew bottles for %s %s", sample.Formula, sample.Version),
 	}
@@ -273,6 +286,10 @@ func (p *Publisher) addCommonAnnotations(annotations map[string]string) {
 	}
 	if p.opts.Homepage != "" {
 		annotations["org.opencontainers.image.url"] = p.opts.Homepage
+		annotations["org.opencontainers.image.documentation"] = p.opts.Homepage
+	}
+	if p.opts.Vendor != "" {
+		annotations["org.opencontainers.image.vendor"] = p.opts.Vendor
 	}
 	if p.opts.License != "" {
 		annotations["org.opencontainers.image.licenses"] = p.opts.License
