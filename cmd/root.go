@@ -89,6 +89,10 @@ func initConfig(opts *Options) error {
 	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 	_ = viper.BindEnv("registry.root_path", "GOBOTTLE_REPO", "GOBOTTLE_REGISTRY_ROOT_PATH")
+	// GOBOTTLE_TAP_TOKEN optionally dedicates a token to tap commits; when
+	// unset (or empty) the tap falls back to the standard token
+	// (GITHUB_TOKEN et al.) via the defaults below and the config cascade.
+	_ = viper.BindEnv("tap.token", "GOBOTTLE_TAP_TOKEN")
 
 	// Also check for GITHUB_TOKEN
 	if token := os.Getenv("GITHUB_TOKEN"); token != "" {

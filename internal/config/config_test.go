@@ -435,6 +435,25 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestTapTokenCascade(t *testing.T) {
+	// Unset tap token inherits the registry token.
+	cfg := &Config{}
+	cfg.Registry.Token = "standard"
+	cfg.SetDefaults()
+	if cfg.Tap.Token != "standard" {
+		t.Errorf("tap token = %q, want inherited %q", cfg.Tap.Token, "standard")
+	}
+
+	// A dedicated tap token is preserved.
+	cfg = &Config{}
+	cfg.Registry.Token = "standard"
+	cfg.Tap.Token = "dedicated"
+	cfg.SetDefaults()
+	if cfg.Tap.Token != "dedicated" {
+		t.Errorf("tap token = %q, want %q", cfg.Tap.Token, "dedicated")
+	}
+}
+
 func TestBinaryNames(t *testing.T) {
 	cfg := &Config{
 		Binaries: []BinaryConfig{
