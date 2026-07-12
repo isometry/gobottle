@@ -23,4 +23,4 @@ source:
 
 tap:
   owner: isometry
-  repo: homebrew-test
+  repo: homebrew-tap

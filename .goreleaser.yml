@@ -14,19 +14,17 @@ builds:
     ldflags:
       - >-
         -s -w
-        -X main.version={{.Version}}
-        -X main.commit={{.ShortCommit}}
-        -X main.date={{.Date}}
+        -X github.com/isometry/gobottle/cmd.Version={{ .Version }}
+        -X github.com/isometry/gobottle/cmd.Commit={{ .ShortCommit }}
+        -X github.com/isometry/gobottle/cmd.Date={{ .CommitDate }}
     goos:
-      - freebsd
-      - windows
-      - linux
       - darwin
+      - linux
     goarch:
       - amd64
       - arm64
 archives:
-  - format: zip
+  - formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 snapshot:
   version_template: "{{ .Tag }}-next"
