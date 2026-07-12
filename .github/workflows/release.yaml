@@ -37,17 +37,22 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Attest release binaries
+      - name: Publish bottles
+        # Bottle the binaries goreleaser just built instead of
+        # recompiling: bottles carry the exact release bytes.
+        run: go run . release --source local
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOBOTTLE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+
+      - name: Attest release artifacts
+        # Subjects cover every distribution surface: release archives and
+        # checksums, the raw binaries (verifiable post-install), and the
+        # bottle tarballs brew downloads.
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
         with:
           subject-path: |
             dist/*.zip
             dist/*_SHA256SUMS
-
-      - name: Publish bottles
-        # Bottle the archives goreleaser just built (and attested) instead
-        # of recompiling: bottles carry the exact release binaries.
-        run: go run . release --source local
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GOBOTTLE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+            dist/*/gobottle
+            bottles/*.tar.gz
