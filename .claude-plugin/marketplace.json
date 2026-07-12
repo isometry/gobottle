@@ -9,7 +9,7 @@
       "name": "gobottle",
       "source": "./",
       "description": "Publish real Homebrew bottles for Go projects: cross-compile, bottle, push to GHCR, and own the tap formula. Includes migration guidance from goreleaser's brews support.",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }

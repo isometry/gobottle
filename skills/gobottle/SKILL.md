@@ -92,7 +92,9 @@ nothing.
 
 Artifact sources: `--source go` (ko-like, cross-compiles the module),
 `--source local` (a GoReleaser `dist/` directory), `--source github` (an
-existing GitHub release's archives).
+existing GitHub release's archives). Local and GitHub sources accept
+tar.gz, zip, and tar.bz2 archives (gobottle ≥0.5), verified against the
+release's checksum manifest.
 
 ## Key behaviors worth knowing
 
@@ -152,6 +154,30 @@ Action inputs: `version` (`latest`, exact pin like `1.2.3`, or prefix like
 `1` / `1.2` → newest matching stable), `repository`, `token`, `verify`
 (SLSA provenance check, default on; checksums always enforced). Outputs:
 `version`, `path`, `cache-hit`.
+
+**Already running goreleaser in the same job?** Don't rebuild — bottle
+the archives it just produced. Use `gobottle release --source local`
+after the goreleaser step (dist/ is already in the workspace,
+checksum-verified against goreleaser's manifest):
+
+```yaml
+      - uses: goreleaser/goreleaser-action@v7
+        with:
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: isometry/gobottle-setup@v1
+      - run: gobottle release --source local
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOBOTTLE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+```
+
+Choosing: dist-reuse skips a full cross-compile and makes bottles
+byte-identical to the GitHub-release archives (one build — if the
+workflow attests `dist/*`, the poured bytes share that provenance);
+`source: go` gives commit-reproducible bottles and needs no goreleaser
+at all.
 
 ## Migrating from goreleaser `brews:`
 
