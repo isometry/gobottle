@@ -117,8 +117,12 @@ Notes:
    visibility) — brew pours anonymously.
 3. The goreleaser-era formula file is simply overwritten by gobottle's
    commit; no manual cleanup.
-4. Verify: `brew update && brew install <owner>/<tap>/<formula>` should
+4. Verify: `brew trust <owner>/<tap>` (required once on Homebrew ≥6 —
+   third-party taps are untrusted by default and installs fail without
+   it), then `brew update && brew install <owner>/<tap>/<formula>` should
    say "Pouring <formula>--<version>...bottle.tar.gz"; completions land in
    `$(brew --prefix)/share/zsh/site-functions/_<formula>` et al.
 5. Existing users upgrade seamlessly: same formula name, same tap; the
    next `brew upgrade` pours a bottle instead of downloading an archive.
+   Users who upgraded to Homebrew ≥6 need the same one-time
+   `brew trust <owner>/<tap>` — document it in your install instructions.

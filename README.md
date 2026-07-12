@@ -34,6 +34,7 @@ with a Go-template escape hatch for anything not yet modeled.
 ## Installation
 
 ```sh
+brew trust isometry/tap               # Homebrew ≥6: one-time tap trust
 brew install isometry/tap/gobottle    # poured as a bottle, naturally
 go install github.com/isometry/gobottle@latest
 ```

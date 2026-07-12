@@ -32,8 +32,10 @@ works, and the bottle block pins per-platform SHA256s for integrity. See
 
 ## Installing gobottle
 
-- Locally: `brew install isometry/tap/gobottle` (poured as a bottle,
-  naturally) or `go install github.com/isometry/gobottle@latest`.
+- Locally: `brew trust isometry/tap && brew install isometry/tap/gobottle`
+  (Homebrew ≥6 requires third-party taps to be trusted before install;
+  poured as a bottle, naturally) or
+  `go install github.com/isometry/gobottle@latest`.
 - In GitHub Actions: the `isometry/gobottle-setup` action — see
   [CI with gobottle-setup](#ci-with-gobottle-setup).
 
@@ -115,6 +117,10 @@ existing GitHub release's archives).
   install_path: libexec}]` stages and renders install lines per path.
 - **GHCR visibility**: after the first release, make the package public
   (Package settings → Change visibility) or brew cannot pour anonymously.
+- **Tap trust (Homebrew ≥6)**: installs from third-party taps fail until
+  the user runs `brew trust <owner>/<tap>` once (or trusts a single
+  formula with `brew trust --formula <owner>/<tap>/<formula>`) — tell
+  formula consumers to include that step.
 
 Full configuration reference: [references/configuration.md](references/configuration.md).
 
