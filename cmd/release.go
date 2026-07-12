@@ -192,6 +192,7 @@ func runRelease(ctx context.Context, cfg *config.Config, manifest *Manifest, tap
 	if err != nil {
 		return fmt.Errorf("failed to commit formula: %w", err)
 	}
+	manifest.Tap.Branch = updater.Branch()
 	manifest.Tap.CommitSHA = sha
 	progress("Committed %s to %s/%s@%s (%s)", formulaPath, manifest.Tap.Owner, manifest.Tap.Repo, manifest.Tap.Branch, sha)
 

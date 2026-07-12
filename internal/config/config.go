@@ -235,9 +235,6 @@ func (c *Config) SetDefaults() {
 	if c.Tap.Repo == "" {
 		c.Tap.Repo = "homebrew-tap"
 	}
-	if c.Tap.Branch == "" {
-		c.Tap.Branch = "main"
-	}
 	if c.Tap.FormulaPath == "" {
 		c.Tap.FormulaPath = "Formula"
 	}

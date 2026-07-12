@@ -55,12 +55,12 @@ func TestSetDefaults(t *testing.T) {
 			expected: "Tap.Repo should be 'homebrew-tap'",
 		},
 		{
-			name:  "empty config gets main branch",
+			name:  "tap branch stays empty meaning the tap's default branch",
 			input: &Config{},
 			check: func(c *Config) bool {
-				return c.Tap.Branch == "main"
+				return c.Tap.Branch == ""
 			},
-			expected: "Tap.Branch should be 'main'",
+			expected: "Tap.Branch should stay empty (resolved to the tap's default branch at release time)",
 		},
 		{
 			name:  "root path derived from owner and tap repo",

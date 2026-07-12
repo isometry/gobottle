@@ -29,10 +29,6 @@ func NewUpdater(token, owner, repo, branch string) *Updater {
 		client = github.NewClient(nil)
 	}
 
-	if branch == "" {
-		branch = "main"
-	}
-
 	return &Updater{
 		client: client,
 		owner:  owner,
@@ -46,6 +42,15 @@ func NewUpdater(token, owner, repo, branch string) *Updater {
 // "Formula/myapp.rb"); content is the complete formula; message is the
 // commit message.
 func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte, message string) (string, error) {
+	// An unconfigured branch means the repository's default branch — never
+	// assume a name; taps predating the main-branch convention use master.
+	if u.branch == "" {
+		repo, _, err := u.client.Repositories.Get(ctx, u.owner, u.repo)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve default branch of %s/%s: %w", u.owner, u.repo, err)
+		}
+		u.branch = repo.GetDefaultBranch()
+	}
 
 	// Check if the target branch exists
 	branchExists, err := u.BranchExists(ctx)
@@ -147,9 +152,18 @@ func (u *Updater) FormulaExists(ctx context.Context, path string) (bool, error) 
 	return true, nil
 }
 
-// BranchExists checks if the specified branch exists in the repository
+// Branch returns the branch targeted for formula commits; when constructed
+// with an empty branch it is resolved by UpdateFormula.
+func (u *Updater) Branch() string {
+	return u.branch
+}
+
+// BranchExists checks if the specified branch exists in the repository.
+// Git.GetRef is used deliberately: Repositories.GetBranch follows redirects
+// itself and returns a plain error (not *github.ErrorResponse) on 404,
+// which would turn "branch missing" into a hard failure.
 func (u *Updater) BranchExists(ctx context.Context) (bool, error) {
-	_, _, err := u.client.Repositories.GetBranch(ctx, u.owner, u.repo, u.branch, 0)
+	_, _, err := u.client.Git.GetRef(ctx, u.owner, u.repo, "heads/"+u.branch)
 	if err != nil {
 		if errResp, ok := err.(*github.ErrorResponse); ok {
 			if errResp.Response.StatusCode == 404 {

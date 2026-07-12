@@ -70,7 +70,7 @@ func addBuildFlags(cmd *cobra.Command) {
 	cmd.Flags().String("registry-path", "", "image path between host and formula name (default: <owner>/<tap minus homebrew->)")
 	cmd.Flags().String("tap-owner", "", "tap owner (default: --owner)")
 	cmd.Flags().String("tap-repo", "", "tap repository name (default: homebrew-tap)")
-	cmd.Flags().String("tap-branch", "", "tap branch (default: main)")
+	cmd.Flags().String("tap-branch", "", "tap branch (default: the tap's default branch)")
 }
 
 // NewBuildCommand creates the `build` verb: compile/collect artifacts and
