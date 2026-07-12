@@ -313,11 +313,12 @@ func (e *MultiError) Error() string {
 	if len(e.Errors) == 1 {
 		return e.Errors[0].Error()
 	}
-	msg := fmt.Sprintf("%d validation errors:\n", len(e.Errors))
+	var msg strings.Builder
+	msg.WriteString(fmt.Sprintf("%d validation errors:\n", len(e.Errors)))
 	for _, err := range e.Errors {
-		msg += fmt.Sprintf("  - %s\n", err.Error())
+		msg.WriteString(fmt.Sprintf("  - %s\n", err.Error()))
 	}
-	return msg
+	return msg.String()
 }
 
 // Validate performs comprehensive config validation

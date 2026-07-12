@@ -36,8 +36,8 @@ func ParseArtifactName(filename string) (os, arch string, ok bool) {
 	// Remove extension(s) to get the base name
 	base := strings.TrimSuffix(filename, filepath.Ext(filename))
 	// Handle double extensions like .tar.gz
-	if strings.HasSuffix(base, ".tar") {
-		base = strings.TrimSuffix(base, ".tar")
+	if before, ok0 := strings.CutSuffix(base, ".tar"); ok0 {
+		base = before
 	}
 
 	// Try common GoReleaser pattern: name_version_os_arch

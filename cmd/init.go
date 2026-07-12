@@ -7,7 +7,7 @@ import (
 
 	"github.com/isometry/gobottle/internal/git"
 	"github.com/spf13/cobra"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // InitOptions holds options for the init command

@@ -81,7 +81,7 @@ func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte
 		}
 	} else {
 		// Branch exists - check if file exists to get its SHA
-		branchPtr = github.String(u.branch)
+		branchPtr = new(u.branch)
 		currentFile, _, resp, err := u.client.Repositories.GetContents(ctx, u.owner, u.repo, path, &github.RepositoryContentGetOptions{
 			Ref: u.branch,
 		})
@@ -100,7 +100,7 @@ func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte
 
 	// Create or update the file
 	opts := &github.RepositoryContentFileOptions{
-		Message: github.String(message),
+		Message: new(message),
 		Content: content,
 		Branch:  branchPtr,
 		SHA:     sha,

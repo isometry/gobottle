@@ -32,7 +32,7 @@ func newTestUpdater(t *testing.T, branch string, mux *http.ServeMux) *Updater {
 func TestBranchExists(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/acme/homebrew-tap/git/ref/heads/master", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(github.Reference{Ref: github.String("refs/heads/master")})
+		_ = json.NewEncoder(w).Encode(github.Reference{Ref: new("refs/heads/master")})
 	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -63,10 +63,10 @@ func TestBranchExists(t *testing.T) {
 func TestUpdateFormulaResolvesDefaultBranch(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /repos/acme/homebrew-tap", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(github.Repository{DefaultBranch: github.String("master")})
+		_ = json.NewEncoder(w).Encode(github.Repository{DefaultBranch: new("master")})
 	})
 	mux.HandleFunc("GET /repos/acme/homebrew-tap/git/ref/heads/master", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(github.Reference{Ref: github.String("refs/heads/master")})
+		_ = json.NewEncoder(w).Encode(github.Reference{Ref: new("refs/heads/master")})
 	})
 	mux.HandleFunc("GET /repos/acme/homebrew-tap/contents/Formula/mytool.rb", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -81,7 +81,7 @@ func TestUpdateFormulaResolvesDefaultBranch(t *testing.T) {
 			t.Errorf("commit targeted branch %v, want master", body.Branch)
 		}
 		_ = json.NewEncoder(w).Encode(github.RepositoryContentResponse{
-			Commit: github.Commit{SHA: github.String("abc123")},
+			Commit: github.Commit{SHA: new("abc123")},
 		})
 	})
 
