@@ -2,7 +2,7 @@
   "name": "gobottle",
   "displayName": "gobottle",
   "description": "Publish real Homebrew bottles for Go projects: cross-compile, bottle, push to GHCR, and own the tap formula. Includes migration guidance from goreleaser's brews support.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": { "name": "Robin Breathe" },
   "homepage": "https://github.com/isometry/gobottle",
   "repository": "https://github.com/isometry/gobottle",
