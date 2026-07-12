@@ -3,6 +3,7 @@ package util
 import (
 	"archive/tar"
 	"archive/zip"
+	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -10,6 +11,24 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+// ExtractArchive extracts an archive to a destination directory,
+// dispatching on the file extension. The supported set must stay in sync
+// with artifact.IsArchive so discovery never accepts what extraction
+// cannot handle.
+func ExtractArchive(archivePath, destDir string) error {
+	name := strings.ToLower(archivePath)
+	switch {
+	case strings.HasSuffix(name, ".tar.gz"), strings.HasSuffix(name, ".tgz"):
+		return ExtractTarGz(archivePath, destDir)
+	case strings.HasSuffix(name, ".zip"):
+		return ExtractZip(archivePath, destDir)
+	case strings.HasSuffix(name, ".tar.bz2"):
+		return ExtractTarBz2(archivePath, destDir)
+	default:
+		return fmt.Errorf("unsupported archive format: %s", filepath.Base(archivePath))
+	}
+}
 
 // ExtractTarGz extracts a .tar.gz archive to a destination directory
 func ExtractTarGz(archivePath, destDir string) error {
@@ -25,7 +44,23 @@ func ExtractTarGz(archivePath, destDir string) error {
 	}
 	defer gzr.Close()
 
-	tr := tar.NewReader(gzr)
+	return extractTar(gzr, destDir)
+}
+
+// ExtractTarBz2 extracts a .tar.bz2 archive to a destination directory
+func ExtractTarBz2(archivePath, destDir string) error {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("failed to open archive: %w", err)
+	}
+	defer f.Close()
+
+	return extractTar(bzip2.NewReader(f), destDir)
+}
+
+// extractTar walks a tar stream, writing entries under destDir.
+func extractTar(r io.Reader, destDir string) error {
+	tr := tar.NewReader(r)
 
 	for {
 		header, err := tr.Next()

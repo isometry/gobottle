@@ -66,7 +66,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		return nil, fmt.Errorf("failed to create extract directory: %w", err)
 	}
 
-	if err := util.ExtractTarGz(opts.ArtifactPath, extractDir); err != nil {
+	if err := util.ExtractArchive(opts.ArtifactPath, extractDir); err != nil {
 		return nil, fmt.Errorf("failed to extract artifact: %w", err)
 	}
 

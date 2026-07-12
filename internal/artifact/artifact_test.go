@@ -332,7 +332,9 @@ func TestIsArchive(t *testing.T) {
 		{"myapp.tar.gz", true},
 		{"myapp.tgz", true},
 		{"myapp.tar.bz2", true},
-		{"myapp.tar.xz", true},
+		// tar.xz is intentionally unsupported: util.ExtractArchive cannot
+		// decode xz without a third-party dependency
+		{"myapp.tar.xz", false},
 		{"myapp.zip", true},
 		{"MYAPP.TAR.GZ", true},
 		{"myapp.ZIP", true},

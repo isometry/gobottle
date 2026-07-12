@@ -159,12 +159,13 @@ func FilterArtifacts(artifacts []Artifact, os, arch string) []Artifact {
 	return filtered
 }
 
-// IsArchive checks if a filename appears to be an archive
+// IsArchive checks if a filename appears to be an archive. The accepted
+// set must stay in sync with util.ExtractArchive: accepting a format we
+// cannot extract turns "no artifacts found" into a cryptic decode error.
 func IsArchive(filename string) bool {
 	lower := strings.ToLower(filename)
 	return strings.HasSuffix(lower, ".tar.gz") ||
 		strings.HasSuffix(lower, ".tgz") ||
 		strings.HasSuffix(lower, ".tar.bz2") ||
-		strings.HasSuffix(lower, ".tar.xz") ||
 		strings.HasSuffix(lower, ".zip")
 }

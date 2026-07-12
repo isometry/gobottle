@@ -101,13 +101,19 @@ Notes:
   repo only; `GITHUB_TOKEN` covers GHCR.
 - Checkout needs `fetch-depth: 0`: gobottle derives the version from the
   semver tag at HEAD and timestamps from the commit.
-- Source choice: `source.type: go` has gobottle cross-compile
-  deterministically (bottles are reproducible per commit). Alternatively
-  `--source local` consumes goreleaser's `dist/` so released archives and
-  bottles contain byte-identical binaries — choose it when that identity
-  matters more than gobottle-controlled reproducibility. (gobottle's
-  extractor expects tar.gz archives; zip-only goreleaser configs need
-  `source.type: go`.)
+- Source choice — two good options:
+  - **Reuse goreleaser's build** (no runner minutes recompiling): the
+    goreleaser step leaves `dist/` in the workspace, so
+    `gobottle release --source local` bottles those exact archives
+    (tar.gz, zip, or tar.bz2), verified against goreleaser's
+    `checksums.txt`. Bottles then contain binaries byte-identical to the
+    GitHub-release archives — one build, one provenance: if the workflow
+    attests `dist/*`, the very same bytes users pour are covered by the
+    SLSA attestation.
+  - **`source.type: go`**: gobottle cross-compiles independently with
+    commit-derived timestamps, making bottles reproducible per commit
+    regardless of goreleaser's flags. Choose this when you want
+    bit-reproducible bottles or don't run goreleaser at all.
 
 ## First-release checklist
 

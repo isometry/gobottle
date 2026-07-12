@@ -2,6 +2,7 @@ package bottle
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"context"
 	"io"
@@ -144,6 +145,44 @@ func TestBuildInstallPaths(t *testing.T) {
 		if _, ok := entries[want]; !ok {
 			t.Errorf("bottle missing entry %s (have %v)", want, keys(entries))
 		}
+	}
+}
+
+// makeZipArtifact writes a minimal zip artifact (goreleaser's other
+// archive format) containing the named binaries at its root.
+func makeZipArtifact(t *testing.T, binaries ...string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "artifact.zip")
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	zw := zip.NewWriter(f)
+	for _, name := range binaries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte("#!/bin/sh\necho " + name + "\n")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestBuildFromZipArtifact(t *testing.T) {
+	artifact := makeZipArtifact(t, "mytool")
+	opts := testBuildOptions(artifact)
+
+	b := buildOnce(t, opts)
+
+	entries := readTarGz(t, b.Path)
+	if got := entries["mytool/1.2.3/bin/mytool"]; !strings.Contains(got, "echo mytool") {
+		t.Errorf("zip-sourced binary content = %q (have %v)", got, keys(entries))
 	}
 }
 
