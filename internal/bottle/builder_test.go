@@ -186,6 +186,22 @@ func TestBuildFromZipArtifact(t *testing.T) {
 	}
 }
 
+func TestBuildFromDirectoryArtifact(t *testing.T) {
+	// Raw-binary sources stage a directory instead of an archive.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mytool"), []byte("#!/bin/sh\necho mytool\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	opts := testBuildOptions(dir)
+
+	b := buildOnce(t, opts)
+
+	entries := readTarGz(t, b.Path)
+	if got := entries["mytool/1.2.3/bin/mytool"]; !strings.Contains(got, "echo mytool") {
+		t.Errorf("dir-sourced binary content = %q (have %v)", got, keys(entries))
+	}
+}
+
 func TestBuildExtraFiles(t *testing.T) {
 	artifact := makeArtifact(t, "mytool")
 	opts := testBuildOptions(artifact)

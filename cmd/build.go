@@ -169,7 +169,9 @@ func generateCompletions(ctx context.Context, cfg *config.Config, source artifac
 		return nil, fmt.Errorf("failed to fetch artifact %s for completions: %w", host.Name, err)
 	}
 	extractDir := filepath.Join(workDir, "extract")
-	if err := util.ExtractArchive(archivePath, extractDir); err != nil {
+	if info, err := os.Stat(archivePath); err == nil && info.IsDir() {
+		extractDir = archivePath
+	} else if err := util.ExtractArchive(archivePath, extractDir); err != nil {
 		return nil, fmt.Errorf("failed to extract artifact for completions: %w", err)
 	}
 
