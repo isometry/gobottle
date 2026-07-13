@@ -103,17 +103,36 @@ Notes:
   semver tag at HEAD and timestamps from the commit.
 - Source choice — two good options:
   - **Reuse goreleaser's build** (no runner minutes recompiling): the
-    goreleaser step leaves `dist/` in the workspace, so
-    `gobottle release --source local` bottles those exact archives
-    (tar.gz, zip, or tar.bz2), verified against goreleaser's
-    `checksums.txt`. Bottles then contain binaries byte-identical to the
-    GitHub-release archives — one build, one provenance: if the workflow
-    attests `dist/*`, the very same bytes users pour are covered by the
-    SLSA attestation.
+    goreleaser step leaves `dist/` in the workspace, and
+    `gobottle release --source local` (≥0.7) reads its `artifacts.json`
+    to bottle the **raw binaries** directly — no archive round-trip,
+    multi-binary aware. Dists without the manifest fall back to archive
+    discovery (tar.gz/zip/tar.bz2, cross-checked against goreleaser's
+    checksum manifest). Bottles contain the exact bytes of the release
+    build. Note raw binaries aren't listed in goreleaser's SHA256SUMS
+    (archives only): within-job filesystem trust applies, and binary
+    attestation (below) covers the same bytes cryptographically.
   - **`source.type: go`**: gobottle cross-compiles independently with
     commit-derived timestamps, making bottles reproducible per commit
     regardless of goreleaser's flags. Choose this when you want
     bit-reproducible bottles or don't run goreleaser at all.
+- Provenance (recommended): attest every distribution surface — release
+  archives, raw binaries, and the bottle tarballs themselves — so
+  `gh attestation verify <artifact> --repo <owner>/<repo>` works directly
+  on whatever a user holds, including the installed binary
+  (`gh attestation verify "$(brew --prefix)/bin/<binary>" --repo <owner>/<repo>`).
+  Add `id-token: write` and `attestations: write` to the job permissions
+  and place the attest step after the bottles are built:
+
+```yaml
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*_SHA256SUMS
+            dist/*/<binary>
+            bottles/*.tar.gz
+```
 
 ## First-release checklist
 

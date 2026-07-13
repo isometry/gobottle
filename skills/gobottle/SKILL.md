@@ -156,9 +156,11 @@ Action inputs: `version` (`latest`, exact pin like `1.2.3`, or prefix like
 `version`, `path`, `cache-hit`.
 
 **Already running goreleaser in the same job?** Don't rebuild — bottle
-the archives it just produced. Use `gobottle release --source local`
-after the goreleaser step (dist/ is already in the workspace,
-checksum-verified against goreleaser's manifest):
+what it just built. With gobottle ≥0.7, `--source local` reads
+goreleaser's `dist/artifacts.json` and bottles the **raw binaries**
+directly (no archive round-trip; multi-binary aware); dists without that
+manifest fall back to archive discovery (tar.gz/zip/tar.bz2, verified
+against goreleaser's checksum manifest):
 
 ```yaml
       - uses: goreleaser/goreleaser-action@v7
@@ -173,11 +175,30 @@ checksum-verified against goreleaser's manifest):
           GOBOTTLE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 ```
 
-Choosing: dist-reuse skips a full cross-compile and makes bottles
-byte-identical to the GitHub-release archives (one build — if the
-workflow attests `dist/*`, the poured bytes share that provenance);
-`source: go` gives commit-reproducible bottles and needs no goreleaser
-at all.
+Choosing: dist-reuse skips a full cross-compile and bottles the exact
+bytes of the release build — one build across both distribution
+channels; `source: go` gives commit-reproducible bottles and needs no
+goreleaser at all.
+
+**Provenance (recommended with dist-reuse):** attest every distribution
+surface so `gh attestation verify --repo <owner>/<repo>` works directly
+against release archives, raw/installed binaries, and the bottle
+tarballs brew downloads. The job needs `id-token: write` and
+`attestations: write` permissions, and the attest step goes after the
+bottles are built:
+
+```yaml
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.zip
+            dist/*_SHA256SUMS
+            dist/*/<binary>
+            bottles/*.tar.gz
+```
+
+Your users can then verify an installed binary end-to-end:
+`gh attestation verify "$(brew --prefix)/bin/<binary>" --repo <owner>/<repo>`.
 
 ## Migrating from goreleaser `brews:`
 
