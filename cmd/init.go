@@ -102,6 +102,10 @@ func runInit(opts *InitOptions) error {
 # <owner>/<tap repo minus homebrew- prefix>. The formula section drives the
 # fully generated formula (dependencies, caveats, completions, service,
 # template override, ... are also available).
+#
+# The formula's install block compiles from source (so --build-from-source
+# and --HEAD work), inheriting packages/ldflags/flags/env from source.build;
+# override any of it under formula.build.
 
 `
 

@@ -50,11 +50,18 @@ type FormulaConfig struct {
 	// License as an SPDX identifier; omitted from the formula if empty
 	License string `mapstructure:"license"`
 
-	// Head emits a `head "<repo>.git", branch: "<branch>"` stanza
-	Head bool `mapstructure:"head"`
+	// Head emits a `head "<repo>.git", branch: "<branch>"` stanza.
+	// Tri-state: unset defaults to true whenever a git URL is derivable (the
+	// generated install block compiles from source, so --HEAD works), while an
+	// explicit `head: false` suppresses the stanza. Resolved in SetDefaults.
+	Head *bool `mapstructure:"head"`
 
 	// HeadBranch overrides the head branch (default: "main")
 	HeadBranch string `mapstructure:"head_branch"`
+
+	// Build controls how the generated formula compiles from source under
+	// `brew install --build-from-source` and `--HEAD`
+	Build FormulaBuildConfig `mapstructure:"build"`
 
 	// Dependencies become depends_on lines
 	Dependencies []string `mapstructure:"dependencies"`
@@ -77,6 +84,50 @@ type FormulaConfig struct {
 	// Template is a path to a Go template overriding the built-in formula
 	// template; it receives the full formula model.
 	Template string `mapstructure:"template"`
+}
+
+// FormulaBuildConfig describes how the *generated formula* compiles from
+// source on the user's machine. Distinct from source.build, which is how
+// gobottle cross-compiles bottles on the release machine; the two share a
+// recipe, so every field here defaults from source.build (see SetDefaults)
+// and existing configurations need no edits.
+type FormulaBuildConfig struct {
+	// Enabled renders the source-build install block (default: true).
+	// `enabled: false` restores the legacy `bin.install` block, which only
+	// works when pouring a bottle.
+	Enabled *bool `mapstructure:"enabled"`
+
+	// Go is the depends_on spec for the build-time Go toolchain
+	// (default: "go"; e.g. "go@1.23" to pin)
+	Go string `mapstructure:"go"`
+
+	// Packages to compile (default: source.build.packages, else ["."])
+	Packages []string `mapstructure:"packages"`
+
+	// Ldflags template, rendered with Ruby interpolations
+	// (default: source.build.ldflags)
+	Ldflags string `mapstructure:"ldflags"`
+
+	// Tags become std_go_args(tags: [...])
+	Tags []string `mapstructure:"tags"`
+
+	// Flags are extra `go build` flags (default: source.build.flags)
+	Flags []string `mapstructure:"flags"`
+
+	// Env sets ENV["KEY"] = "value" lines (default: source.build.env);
+	// CGO_ENABLED is always derived from source.build.cgo_enabled so the
+	// source build matches the bottle
+	Env []string `mapstructure:"env"`
+
+	// ModDir is the go.mod directory, wrapped in `cd "<dir>" do`
+	// (default: source.build.mod_dir)
+	ModDir string `mapstructure:"mod_dir"`
+}
+
+// IsEnabled reports whether the generated formula gets a source-build install
+// block (default: true).
+func (f *FormulaBuildConfig) IsEnabled() bool {
+	return boolOr(f.Enabled, true)
 }
 
 // InstallConfig customizes the generated install block.
@@ -138,8 +189,9 @@ type BuildConfig struct {
 	// Enable CGO (default: false for portable static binaries)
 	CGOEnabled bool `mapstructure:"cgo_enabled"`
 
-	// Use -trimpath for reproducible builds (default: true)
-	Trimpath bool `mapstructure:"trimpath"`
+	// Use -trimpath for reproducible builds (default: true).
+	// Pointer so `trimpath: false` is distinguishable from unset.
+	Trimpath *bool `mapstructure:"trimpath"`
 
 	// Extra go build flags
 	Flags []string `mapstructure:"flags"`
@@ -149,6 +201,13 @@ type BuildConfig struct {
 
 	// Number of parallel builds (default: GOMAXPROCS)
 	Parallel int `mapstructure:"parallel"`
+}
+
+// TrimpathEnabled reports whether cross-compiled bottles are built with
+// -trimpath (default: true, matching what std_go_args does for the
+// source-built formula).
+func (b *BuildConfig) TrimpathEnabled() bool {
+	return boolOr(b.Trimpath, true)
 }
 
 // BottleConfig defines bottle generation settings
@@ -210,6 +269,19 @@ type BinaryConfig struct {
 	InstallPath string `mapstructure:"install_path"`
 }
 
+// boolOr dereferences a tri-state boolean, returning def when unset.
+func boolOr(b *bool, def bool) bool {
+	if b == nil {
+		return def
+	}
+	return *b
+}
+
+// boolPtr returns a pointer to b, for materializing tri-state defaults.
+func boolPtr(b bool) *bool {
+	return &b
+}
+
 // SetDefaults sets default values for the configuration
 func (c *Config) SetDefaults() {
 	if c.Source.Type == "" {
@@ -224,6 +296,9 @@ func (c *Config) SetDefaults() {
 		if c.Source.Build.ModDir == "" {
 			c.Source.Build.ModDir = "."
 		}
+	}
+	if c.Source.Build.Trimpath == nil {
+		c.Source.Build.Trimpath = boolPtr(true)
 	}
 
 	if c.Bottle.Cellar == "" {
@@ -265,6 +340,36 @@ func (c *Config) SetDefaults() {
 	}
 	if c.Formula.HeadBranch == "" {
 		c.Formula.HeadBranch = "main"
+	}
+
+	// The head spec defaults on whenever a git URL is derivable: the generated
+	// install block compiles from source, so `brew install --HEAD` works.
+	if c.Formula.Head == nil {
+		c.Formula.Head = boolPtr(c.GitURL() != "")
+	}
+
+	// The formula's source-build recipe inherits from source.build: the same
+	// packages, ldflags and flags gobottle cross-compiles the bottles with.
+	if c.Formula.Build.Go == "" {
+		c.Formula.Build.Go = "go"
+	}
+	// Packages deliberately stay empty when neither section configures them,
+	// so formula generation can tell "unset" (assume ".", or warn for a
+	// multi-binary formula) from an explicit list.
+	if len(c.Formula.Build.Packages) == 0 {
+		c.Formula.Build.Packages = c.Source.Build.Packages
+	}
+	if c.Formula.Build.Ldflags == "" {
+		c.Formula.Build.Ldflags = c.Source.Build.Ldflags
+	}
+	if len(c.Formula.Build.Flags) == 0 {
+		c.Formula.Build.Flags = c.Source.Build.Flags
+	}
+	if len(c.Formula.Build.Env) == 0 {
+		c.Formula.Build.Env = c.Source.Build.Env
+	}
+	if c.Formula.Build.ModDir == "" {
+		c.Formula.Build.ModDir = c.Source.Build.ModDir
 	}
 
 	// Default binary to formula name

@@ -34,7 +34,8 @@ type GoSourceConfig struct {
 	// Enable CGO (default: false for portable static binaries)
 	CGOEnabled bool
 
-	// Use -trimpath for reproducible builds (default: true)
+	// Use -trimpath for reproducible builds. There is no default here: the
+	// caller decides (config.BuildConfig.TrimpathEnabled defaults it to true).
 	Trimpath bool
 
 	// Extra go build flags
@@ -220,28 +221,9 @@ func (s *GoSource) buildTarget(ctx context.Context, target BuildTarget, ldflags 
 	}
 
 	// Build each package
-	var binaries []string
+	binaries := PackageBinaries(s.config.Packages, s.config.Binaries, s.config.ModDir)
 	for i, pkg := range s.config.Packages {
-		// Determine binary name
-		var binaryName string
-		if i < len(s.config.Binaries) {
-			binaryName = s.config.Binaries[i]
-		} else {
-			// Default to package base name
-			binaryName = filepath.Base(pkg)
-			if binaryName == "." || binaryName == "" {
-				// If building current directory, use directory name
-				absPath, err := filepath.Abs(filepath.Join(s.config.ModDir, pkg))
-				if err == nil {
-					binaryName = filepath.Base(absPath)
-				} else {
-					binaryName = "app"
-				}
-			}
-		}
-
-		outputPath := filepath.Join(targetDir, binaryName)
-		binaries = append(binaries, binaryName)
+		outputPath := filepath.Join(targetDir, binaries[i])
 
 		// Build the binary
 		if err := s.goBuild(ctx, target, pkg, outputPath, ldflags); err != nil {
@@ -472,20 +454,34 @@ func (s *GoSource) BinaryNames() []string {
 	if len(s.config.Binaries) > 0 {
 		return s.config.Binaries
 	}
+	return PackageBinaries(s.config.Packages, nil, s.config.ModDir)
+}
 
-	// Derive from package names
-	var names []string
-	for _, pkg := range s.config.Packages {
+// PackageBinaries pairs each package with the binary name it produces:
+// binaries[i] when configured, and otherwise the package's base name (the
+// module directory's own name for ".", falling back to "app"). Both the
+// cross-compiler and the generated formula's source-build block go through
+// here, so they can never disagree on which binary comes from which package.
+func PackageBinaries(packages, binaries []string, modDir string) []string {
+	if modDir == "" {
+		modDir = "."
+	}
+	names := make([]string, len(packages))
+	for i, pkg := range packages {
+		if i < len(binaries) && binaries[i] != "" {
+			names[i] = binaries[i]
+			continue
+		}
 		name := filepath.Base(pkg)
 		if name == "." || name == "" {
-			absPath, err := filepath.Abs(filepath.Join(s.config.ModDir, pkg))
+			absPath, err := filepath.Abs(filepath.Join(modDir, pkg))
 			if err == nil {
 				name = filepath.Base(absPath)
 			} else {
 				name = "app"
 			}
 		}
-		names = append(names, name)
+		names[i] = name
 	}
 	return names
 }

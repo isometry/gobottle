@@ -107,7 +107,15 @@ dependencies, caveats, test block etc. are driven by the formula: section of
 // runRelease renders the final formula (with bottle block) and delivers it
 // to the tap.
 func runRelease(ctx context.Context, cfg *config.Config, manifest *Manifest, tapPath string, dryRun bool) error {
-	model, tmpl, err := formulaModel(cfg)
+	// The manifest carries the commit the bottles were built from, so a
+	// `build | push | release` pipeline split across machines still bakes the
+	// right commit into the formula's source-build ldflags.
+	commit := manifest.Source.Commit
+	if commit == "" {
+		commit = resolveReleaseCommit(cfg)
+	}
+
+	model, tmpl, err := formulaModel(cfg, commit)
 	if err != nil {
 		return err
 	}

@@ -31,6 +31,14 @@ fully generated — description, license, dependencies, caveats, completions,
 test block and more are driven from the `formula:` section of the config,
 with a Go-template escape hatch for anything not yet modeled.
 
+The generated formula also builds from source: its `def install` emits
+`depends_on "go" => :build` and `system "go", "build", *std_go_args(...)`
+with the ldflags inherited from `source.build`, so
+`brew install --build-from-source` and `brew install --HEAD` compile
+correctly while everyone else gets a poured bottle. Override it under
+`formula.build`, or set `formula.build.enabled: false` for the older
+bottle-only install block.
+
 ## Installation
 
 ```sh

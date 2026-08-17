@@ -108,6 +108,16 @@ release's checksum manifest.
   brew's keg-relative paths. The
   `generate_completions_from_executable` line is still emitted for
   `--build-from-source` users.
+- **Source-buildable formulae**: the generated `def install` compiles from
+  source — `depends_on "go" => :build`, the ldflags from `source.build`
+  rendered as Ruby interpolations, and `system "go", "build",
+  *std_go_args(...)` — so `brew install --build-from-source` and
+  `brew install --HEAD` both work, and the `head` stanza is emitted by
+  default. The recipe is inherited from `source.build`, so existing
+  configs get it with no edits; override under `formula.build` (or set
+  `formula.build.enabled: false` for the old bottle-only install block).
+  `{{.Commit}}` becomes the release tag's actual commit, with a
+  `build.head?` branch reading the checkout for `--HEAD`.
 - **Tokens**: `GITHUB_TOKEN` authenticates GHCR; `GOBOTTLE_TAP_TOKEN`
   optionally dedicates a token to the tap commit and falls back to the
   standard token when unset. In GitHub Actions the default job token
