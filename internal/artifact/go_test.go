@@ -244,6 +244,66 @@ func TestGoSource_BinaryNames(t *testing.T) {
 	}
 }
 
+func TestPackageBinaries(t *testing.T) {
+	modDir := t.TempDir()
+
+	tests := []struct {
+		name     string
+		packages []string
+		binaries []string
+		expected []string
+	}{
+		{
+			name:     "explicit binaries win",
+			packages: []string{"./cmd/app"},
+			binaries: []string{"myapp"},
+			expected: []string{"myapp"},
+		},
+		{
+			name:     "derived from package basenames",
+			packages: []string{"./cmd/server", "./cmd/client"},
+			expected: []string{"server", "client"},
+		},
+		{
+			name:     "overflow packages fall back to the basename",
+			packages: []string{"./cmd/app1", "./cmd/app2"},
+			binaries: []string{"custom"},
+			expected: []string{"custom", "app2"},
+		},
+		{
+			name:     "surplus binaries are ignored",
+			packages: []string{"./cmd/app1"},
+			binaries: []string{"custom", "unused"},
+			expected: []string{"custom"},
+		},
+		{
+			name:     "module root uses the module directory name",
+			packages: []string{"."},
+			expected: []string{filepath.Base(modDir)},
+		},
+		{
+			name:     "no packages yields no binaries",
+			packages: nil,
+			binaries: []string{"custom"},
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := PackageBinaries(tt.packages, tt.binaries, modDir)
+			if len(result) != len(tt.expected) {
+				t.Fatalf("PackageBinaries() = %v, want %v", result, tt.expected)
+			}
+			for i, exp := range tt.expected {
+				if result[i] != exp {
+					t.Errorf("binary[%d] = %q, want %q", i, result[i], exp)
+				}
+			}
+		})
+	}
+}
+
 func TestGoSource_SourceDateEpoch(t *testing.T) {
 	tmpDir := t.TempDir()
 	goModPath := filepath.Join(tmpDir, "go.mod")

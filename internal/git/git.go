@@ -209,6 +209,20 @@ func (r *Repository) GetHeadCommit() (string, error) {
 	return head.Hash().String(), nil
 }
 
+// GetCommitForTag resolves a tag to the full SHA of the commit it points at.
+// Annotated tag objects are peeled to their target commit, so lightweight and
+// annotated tags resolve identically.
+func (r *Repository) GetCommitForTag(tag string) (string, error) {
+	if tag == "" {
+		return "", fmt.Errorf("tag is required")
+	}
+	hash, err := r.repo.ResolveRevision(plumbing.Revision(tag))
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve tag %s: %w", tag, err)
+	}
+	return hash.String(), nil
+}
+
 // GetHeadCommitTime returns the committer timestamp of the commit at HEAD.
 func (r *Repository) GetHeadCommitTime() (time.Time, error) {
 	head, err := r.repo.Head()

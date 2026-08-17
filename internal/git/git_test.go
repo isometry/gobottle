@@ -46,6 +46,86 @@ func TestGetHeadCommitTime(t *testing.T) {
 	}
 }
 
+func TestGetCommitForTag(t *testing.T) {
+	dir := t.TempDir()
+	repo, err := gogit.PlainInit(dir, false)
+	if err != nil {
+		t.Fatalf("PlainInit: %v", err)
+	}
+	wt, err := repo.Worktree()
+	if err != nil {
+		t.Fatalf("Worktree: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := wt.Add("file.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	sig := &object.Signature{
+		Name:  "Test",
+		Email: "test@example.com",
+		When:  time.Date(2026, 7, 1, 12, 34, 56, 0, time.UTC),
+	}
+	first, err := wt.Commit("initial", &gogit.CommitOptions{Author: sig, Committer: sig})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := repo.CreateTag("v1.0.0", first, nil); err != nil {
+		t.Fatalf("CreateTag (lightweight): %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("more\n"), 0644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if _, err := wt.Add("file.txt"); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	second, err := wt.Commit("second", &gogit.CommitOptions{Author: sig, Committer: sig})
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if _, err := repo.CreateTag("v1.1.0", second, &gogit.CreateTagOptions{Tagger: sig, Message: "release v1.1.0"}); err != nil {
+		t.Fatalf("CreateTag (annotated): %v", err)
+	}
+
+	r, err := Open(dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		tag     string
+		want    string
+		wantErr bool
+	}{
+		{name: "lightweight tag", tag: "v1.0.0", want: first.String()},
+		{name: "annotated tag peels to its commit", tag: "v1.1.0", want: second.String()},
+		{name: "unknown tag", tag: "v9.9.9", wantErr: true},
+		{name: "empty tag", tag: "", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := r.GetCommitForTag(tt.tag)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("GetCommitForTag(%q) = %q, want error", tt.tag, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetCommitForTag(%q): %v", tt.tag, err)
+			}
+			if got != tt.want {
+				t.Errorf("GetCommitForTag(%q) = %q, want %q", tt.tag, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseRemoteURL(t *testing.T) {
 	tests := []struct {
 		name      string

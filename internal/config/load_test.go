@@ -76,7 +76,7 @@ binaries:
 	if cfg.Formula.Name != "mytool" || cfg.Formula.Description != "Does things" {
 		t.Errorf("formula section not loaded: %+v", cfg.Formula)
 	}
-	if !cfg.Formula.Head || !cfg.Formula.Install.Completions {
+	if cfg.Formula.Head == nil || !*cfg.Formula.Head || !cfg.Formula.Install.Completions {
 		t.Error("formula booleans not loaded")
 	}
 	if len(cfg.Formula.Dependencies) != 1 || cfg.Formula.Dependencies[0] != "git" {
@@ -113,6 +113,90 @@ func TestLoadFormulaStringShorthand(t *testing.T) {
 	cfg := loadFromYAML(t, "formula: mytool\n")
 	if cfg.Formula.Name != "mytool" {
 		t.Errorf("string shorthand not accepted: %+v", cfg.Formula)
+	}
+	// The shorthand hook builds a bare FormulaConfig, so the tri-state
+	// pointers must stay nil for SetDefaults to resolve them.
+	if cfg.Formula.Head != nil {
+		t.Errorf("head should be unset by the string shorthand: %v", *cfg.Formula.Head)
+	}
+	if cfg.Formula.Build.Enabled != nil {
+		t.Errorf("build.enabled should be unset by the string shorthand: %v", *cfg.Formula.Build.Enabled)
+	}
+}
+
+func TestLoadHeadTriState(t *testing.T) {
+	tests := []struct {
+		name string
+		yaml string
+		want *bool
+	}{
+		{name: "unset", yaml: "formula:\n  name: mytool\n"},
+		{name: "true", yaml: "formula:\n  name: mytool\n  head: true\n", want: boolPtr(true)},
+		{name: "false", yaml: "formula:\n  name: mytool\n  head: false\n", want: boolPtr(false)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := loadFromYAML(t, tt.yaml).Formula.Head
+			switch {
+			case tt.want == nil && got != nil:
+				t.Errorf("head = %v, want unset", *got)
+			case tt.want != nil && got == nil:
+				t.Errorf("head unset, want %v", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Errorf("head = %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadFormulaBuild(t *testing.T) {
+	cfg := loadFromYAML(t, `
+formula:
+  name: mytool
+  build:
+    enabled: true
+    go: go@1.23
+    packages: [./cmd/mytool]
+    ldflags: "-X main.version={{.Version}}"
+    tags: [netgo, osusergo]
+    flags: ["-mod=vendor"]
+    env:
+      - FOO=bar
+    mod_dir: src
+source:
+  type: go
+  build:
+    trimpath: false
+`)
+
+	b := cfg.Formula.Build
+	if b.Enabled == nil || !*b.Enabled {
+		t.Errorf("build.enabled = %v", b.Enabled)
+	}
+	if b.Go != "go@1.23" {
+		t.Errorf("build.go = %q", b.Go)
+	}
+	if len(b.Packages) != 1 || b.Packages[0] != "./cmd/mytool" {
+		t.Errorf("build.packages = %v", b.Packages)
+	}
+	if b.Ldflags != "-X main.version={{.Version}}" {
+		t.Errorf("build.ldflags = %q", b.Ldflags)
+	}
+	if len(b.Tags) != 2 || b.Tags[0] != "netgo" || b.Tags[1] != "osusergo" {
+		t.Errorf("build.tags = %v", b.Tags)
+	}
+	if len(b.Flags) != 1 || b.Flags[0] != "-mod=vendor" {
+		t.Errorf("build.flags = %v", b.Flags)
+	}
+	if len(b.Env) != 1 || b.Env[0] != "FOO=bar" {
+		t.Errorf("build.env = %v", b.Env)
+	}
+	if b.ModDir != "src" {
+		t.Errorf("build.mod_dir = %q", b.ModDir)
+	}
+	if cfg.Source.Build.Trimpath == nil || *cfg.Source.Build.Trimpath {
+		t.Errorf("source.build.trimpath = %v, want an explicit false", cfg.Source.Build.Trimpath)
 	}
 }
 

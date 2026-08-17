@@ -11,6 +11,9 @@ import (
 // defaultTemplate renders a complete Homebrew formula from the Formula model.
 // Stanzas are conditional: empty values are omitted entirely rather than
 // rendered as empty strings (brew audit rejects `desc ""` / `license ""`).
+// The install block compiles from source when .Build is set (so
+// `brew install --build-from-source` and `--HEAD` work) and otherwise falls
+// back to installing pre-built binaries out of the bottle.
 const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- if .Description }}
   desc {{ quote .Description }}
@@ -42,9 +45,10 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- end }}
   end
 {{- end }}
-{{- range .Dependencies }}
-
-  depends_on {{ quote . }}
+{{- with .DependsOnArgs }}{{ "\n" }}
+{{- range . }}
+  depends_on {{ . }}
+{{- end }}
 {{- end }}
 {{- range .Conflicts }}
 
@@ -52,6 +56,32 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- end }}
 
   def install
+{{- if .Build }}
+{{- $b := .Build }}
+{{- $ind := $b.Indent }}
+{{- range $b.Env }}
+    ENV[{{ quote .Key }}] = {{ quote .Value }}
+{{- end }}
+{{- if $b.WrapsModDir }}
+    cd {{ quote $b.ModDir }} do
+{{- end }}
+{{- with $b.CommitLocal }}
+    {{ $ind }}commit = {{ . }}
+{{- end }}
+{{- if $b.Ldflags }}
+    {{ $ind }}ldflags = %W[
+{{- range $b.LdflagLines }}
+    {{ $ind }}  {{ . }}
+{{- end }}
+    {{ $ind }}]
+{{- end }}
+{{- range $b.Targets }}
+    {{ $ind }}system "go", "build", *std_go_args({{ $.StdGoArgs . }}){{ range $b.Flags }}, {{ quote . }}{{ end }}, {{ quote .Package }}
+{{- end }}
+{{- if $b.WrapsModDir }}
+    end
+{{- end }}
+{{- else }}
 {{- range .Binaries }}
 {{- if eq .InstallPath "bin" }}
     bin.install {{ quote .Name }}
@@ -59,6 +89,7 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
     libexec.install {{ quote .Name }}
 {{- else }}
     (prefix/{{ quote .InstallPath }}).install {{ quote .Name }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- if .Completions }}
@@ -133,6 +164,9 @@ func Generate(f *Formula, tmplText string) (string, error) {
 	}
 	if f.URL == "" && f.Head == nil {
 		return "", fmt.Errorf("formula %s: a source url (or head) is required", f.Name)
+	}
+	if f.Build != nil && len(f.Build.Targets) == 0 {
+		return "", fmt.Errorf("formula %s: the source-build install block requires at least one package", f.Name)
 	}
 
 	if tmplText == "" {

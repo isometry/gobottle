@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/isometry/gobottle/internal/artifact"
@@ -85,9 +86,101 @@ func formulaBinaries(cfg *config.Config) []formula.BinaryInstall {
 	return out
 }
 
+// resolveReleaseCommit resolves the commit the released version was cut from,
+// so the generated formula can bake it into the stable spec's ldflags:
+// the release tag's commit > HEAD > "" (unknown, rendered as tap.user).
+func resolveReleaseCommit(cfg *config.Config) string {
+	repo, err := git.Open(".")
+	if err != nil {
+		return ""
+	}
+	tag := cfg.Source.Tag
+	if tag == "" && cfg.Version != "" {
+		tag = git.NormalizeVersion(cfg.Version)
+	}
+	if tag != "" {
+		if commit, err := repo.GetCommitForTag(tag); err == nil && commit != "" {
+			return commit
+		}
+	}
+	if commit, err := repo.GetHeadCommit(); err == nil {
+		return commit
+	}
+	return ""
+}
+
+// formulaSourceBuild derives the source-build install block from
+// formula.build (which itself inherits from source.build), so that
+// `brew install --build-from-source` and `--HEAD` compile the same recipe
+// gobottle cross-compiles the bottles with.
+//
+// Returns nil — leaving the legacy bin.install block, which only works when
+// pouring a bottle — when the block is disabled, or when the package↔binary
+// mapping cannot be guessed for a multi-binary formula.
+func formulaSourceBuild(cfg *config.Config, commit string, head bool) (*formula.SourceBuild, error) {
+	fb := cfg.Formula.Build
+	if !fb.IsEnabled() {
+		return nil, nil
+	}
+
+	packages := fb.Packages
+	if len(packages) == 0 {
+		if len(cfg.Binaries) > 1 {
+			warn("formula.build.packages is unset and %d binaries are configured - the generated formula falls back to bin.install and cannot build from source", len(cfg.Binaries))
+			return nil, nil
+		}
+		packages = []string{"."}
+	}
+
+	// Pair packages with binaries exactly as the cross-compiler does.
+	names := artifact.PackageBinaries(packages, cfg.BinaryNames(), fb.ModDir)
+	targets := make([]formula.GoTarget, len(packages))
+	for i, pkg := range packages {
+		installPath := "bin"
+		if i < len(cfg.Binaries) && cfg.Binaries[i].InstallPath != "" {
+			installPath = cfg.Binaries[i].InstallPath
+		}
+		targets[i] = formula.GoTarget{Package: pkg, Binary: names[i], InstallPath: installPath}
+	}
+
+	// CGO_ENABLED is derived from source.build so the source build matches
+	// the bottle rather than picking up the user's environment.
+	env := []formula.EnvVar{{Key: "CGO_ENABLED", Value: "0"}}
+	if cfg.Source.Build.CGOEnabled {
+		env[0].Value = "1"
+	}
+	for _, kv := range fb.Env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok || key == "" {
+			warn("ignoring malformed build env entry %q (want KEY=value)", kv)
+			continue
+		}
+		env = append(env, formula.EnvVar{Key: key, Value: value})
+	}
+
+	ldflags, err := formula.RubyLdflags(fb.Ldflags, "commit")
+	if err != nil {
+		return nil, err
+	}
+
+	return &formula.SourceBuild{
+		GoDependency: fb.Go,
+		Env:          env,
+		ModDir:       fb.ModDir,
+		Ldflags:      ldflags,
+		Commit:       commit,
+		HeadCommit:   head,
+		Tags:         fb.Tags,
+		Flags:        fb.Flags,
+		Targets:      targets,
+	}, nil
+}
+
 // formulaModel maps the formula config onto the generator model.
-// The URL/SHA256 come from source config and may be empty at build time.
-func formulaModel(cfg *config.Config) (*formula.Formula, string, error) {
+// The URL/SHA256 come from source config and may be empty at build time;
+// commit is the release tag's commit baked into the source-build ldflags
+// (empty when unknown).
+func formulaModel(cfg *config.Config, commit string) (*formula.Formula, string, error) {
 	f := cfg.Formula
 	model := &formula.Formula{
 		Name:         f.Name,
@@ -107,9 +200,19 @@ func formulaModel(cfg *config.Config) (*formula.Formula, string, error) {
 	if f.Install.Completions {
 		model.Completions = f.Install.CompletionsCommand
 	}
-	if f.Head && cfg.GitURL() != "" {
+	// Head defaults on when a git URL is derivable (resolved in SetDefaults);
+	// an explicit `head: false` still suppresses the stanza.
+	if f.Head != nil && *f.Head && cfg.GitURL() != "" {
 		model.Head = &formula.Head{URL: cfg.GitURL(), Branch: f.HeadBranch}
 	}
+
+	// The head spec is only buildable if the install block knows how to
+	// compile a git checkout, hence the build.head? branch on the commit.
+	build, err := formulaSourceBuild(cfg, commit, model.Head != nil)
+	if err != nil {
+		return nil, "", err
+	}
+	model.Build = build
 
 	tmpl := ""
 	if f.Template != "" {
@@ -177,7 +280,7 @@ func createGoSource(cfg *config.Config, targets []artifact.BuildTarget) (artifac
 		Ldflags:    cfg.Source.Build.Ldflags,
 		Env:        cfg.Source.Build.Env,
 		CGOEnabled: cfg.Source.Build.CGOEnabled,
-		Trimpath:   cfg.Source.Build.Trimpath,
+		Trimpath:   cfg.Source.Build.TrimpathEnabled(),
 		Flags:      cfg.Source.Build.Flags,
 		ModDir:     cfg.Source.Build.ModDir,
 		Parallel:   cfg.Source.Build.Parallel,

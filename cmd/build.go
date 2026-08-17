@@ -223,11 +223,16 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 		return nil, fmt.Errorf("no artifacts found")
 	}
 
+	// The commit the released version was cut from: baked into the formula's
+	// source-build ldflags and carried in the manifest so a later `release`
+	// stage on another machine renders the same formula.
+	releaseCommit := resolveReleaseCommit(cfg)
+
 	// Render the formula (without bottle block) for embedding as
 	// .brew/<formula>.rb. Best-effort: a source URL may not be derivable for
 	// purely local builds.
 	embeddedRb := ""
-	if model, tmpl, err := formulaModel(cfg); err == nil {
+	if model, tmpl, err := formulaModel(cfg, releaseCommit); err == nil {
 		if rb, err := formula.Generate(model, tmpl); err == nil {
 			embeddedRb = rb
 		}
@@ -254,6 +259,7 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 			Type:   cfg.Source.Type,
 			URL:    cfg.SourceURL(),
 			SHA256: cfg.Source.SHA256,
+			Commit: releaseCommit,
 			Tag:    cfg.Source.Tag,
 		},
 		Registry: ManifestReg{Host: cfg.Registry.Host, RootPath: cfg.Registry.RootPath},

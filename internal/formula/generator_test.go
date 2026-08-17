@@ -73,6 +73,292 @@ end
 	}
 }
 
+func TestGenerateSourceBuild(t *testing.T) {
+	ldflags, err := RubyLdflags("-s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.date={{.Date}}", "commit")
+	if err != nil {
+		t.Fatalf("RubyLdflags: %v", err)
+	}
+
+	f := &Formula{
+		Name:        "gobottle",
+		Description: "Build and publish Homebrew bottles for Go projects",
+		Homepage:    "https://github.com/isometry/gobottle",
+		URL:         "https://github.com/isometry/gobottle/archive/refs/tags/v0.8.0.tar.gz",
+		SHA256:      "aaaa",
+		License:     "MIT",
+		Head:        &Head{URL: "https://github.com/isometry/gobottle.git", Branch: "main"},
+		RootURL:     "https://ghcr.io/v2/isometry/tap",
+		Bottles: []BottleSpec{
+			{Platform: "arm64_sequoia", SHA256: "bbbb", Cellar: ":any_skip_relocation"},
+		},
+		Binaries:    []BinaryInstall{{Name: "gobottle", InstallPath: "bin"}},
+		Completions: []string{"completion"},
+		Test:        Test{Command: []string{"version"}},
+		Build: &SourceBuild{
+			GoDependency: "go",
+			Env:          []EnvVar{{Key: "CGO_ENABLED", Value: "0"}},
+			ModDir:       ".",
+			Ldflags:      ldflags,
+			Commit:       "4cce4f5000000000000000000000000000000000",
+			HeadCommit:   true,
+			Targets:      []GoTarget{{Package: ".", Binary: "gobottle", InstallPath: "bin"}},
+		},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	want := `class Gobottle < Formula
+  desc "Build and publish Homebrew bottles for Go projects"
+  homepage "https://github.com/isometry/gobottle"
+  url "https://github.com/isometry/gobottle/archive/refs/tags/v0.8.0.tar.gz"
+  sha256 "aaaa"
+  license "MIT"
+  head "https://github.com/isometry/gobottle.git", branch: "main"
+
+  bottle do
+    root_url "https://ghcr.io/v2/isometry/tap"
+    sha256 cellar: :any_skip_relocation, arm64_sequoia: "bbbb"
+  end
+
+  depends_on "go" => :build
+
+  def install
+    ENV["CGO_ENABLED"] = "0"
+    commit = build.head? ? Utils.git_head(buildpath, safe: false) : "4cce4f5000000000000000000000000000000000"
+    ldflags = %W[
+      -X main.version=#{version}
+      -X main.commit=#{commit}
+      -X main.date=#{time.iso8601}
+    ]
+    system "go", "build", *std_go_args(ldflags: ldflags), "."
+    generate_completions_from_executable(bin/"gobottle", "completion")
+  end
+
+  test do
+    system bin/"gobottle", "version"
+  end
+end
+`
+	if got != want {
+		t.Errorf("formula mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestGenerateSourceBuildMultiBinary(t *testing.T) {
+	f := &Formula{
+		Name:         "tool",
+		URL:          "https://example.com/tool-1.0.0.tar.gz",
+		Dependencies: []string{"git", "jq"},
+		Binaries: []BinaryInstall{
+			{Name: "tool", InstallPath: "bin"},
+			{Name: "helper", InstallPath: "libexec"},
+			{Name: "plugin", InstallPath: "share/tool/plugins"},
+		},
+		Build: &SourceBuild{
+			GoDependency: "go@1.23",
+			ModDir:       "src",
+			Ldflags:      []string{"-X", "main.version=#{version}"},
+			Tags:         []string{"netgo", "osusergo"},
+			Flags:        []string{"-mod=vendor"},
+			Targets: []GoTarget{
+				{Package: "./cmd/tool", Binary: "tool", InstallPath: "bin"},
+				{Package: "./cmd/helper", Binary: "helper", InstallPath: "libexec"},
+				{Package: "./cmd/plugin", Binary: "plugin", InstallPath: "share/tool/plugins"},
+			},
+		},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	want := `class Tool < Formula
+  url "https://example.com/tool-1.0.0.tar.gz"
+
+  depends_on "go@1.23" => :build
+  depends_on "git"
+  depends_on "jq"
+
+  def install
+    cd "src" do
+      ldflags = %W[
+        -X main.version=#{version}
+      ]
+      system "go", "build", *std_go_args(output: bin/"tool", ldflags: ldflags, tags: ["netgo", "osusergo"]), "-mod=vendor", "./cmd/tool"
+      system "go", "build", *std_go_args(output: libexec/"helper", ldflags: ldflags, tags: ["netgo", "osusergo"]), "-mod=vendor", "./cmd/helper"
+      system "go", "build", *std_go_args(output: prefix/"share/tool/plugins/plugin", ldflags: ldflags, tags: ["netgo", "osusergo"]), "-mod=vendor", "./cmd/plugin"
+    end
+  end
+
+  test do
+    system bin/"tool", "--version"
+  end
+end
+`
+	if got != want {
+		t.Errorf("formula mismatch:\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestGenerateSourceBuildCommit(t *testing.T) {
+	tests := []struct {
+		name       string
+		ldflags    []string
+		commit     string
+		headCommit bool
+		want       string
+		absent     string
+	}{
+		{
+			name:       "head ternary with the release commit",
+			ldflags:    []string{"-X", "main.commit=#{commit}"},
+			commit:     "abc123",
+			headCommit: true,
+			want:       `    commit = build.head? ? Utils.git_head(buildpath, safe: false) : "abc123"`,
+		},
+		{
+			name:       "head ternary falls back to tap.user",
+			ldflags:    []string{"-X", "main.commit=#{commit}"},
+			headCommit: true,
+			want:       `    commit = build.head? ? Utils.git_head(buildpath, safe: false) : tap.user`,
+		},
+		{
+			name:    "bare literal without a head spec",
+			ldflags: []string{"-X", "main.commit=#{commit}"},
+			commit:  "abc123",
+			want:    `    commit = "abc123"`,
+		},
+		{
+			name:    "unknown commit without a head spec",
+			ldflags: []string{"-X", "main.commit=#{commit}"},
+			want:    `    commit = tap.user`,
+		},
+		{
+			name:       "no local when the ldflags never reference it",
+			ldflags:    []string{"-X", "main.version=#{version}"},
+			commit:     "abc123",
+			headCommit: true,
+			absent:     "commit =",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Formula{
+				Name:     "tool",
+				URL:      "https://example.com/tool-1.0.0.tar.gz",
+				Binaries: []BinaryInstall{{Name: "tool"}},
+				Build: &SourceBuild{
+					GoDependency: "go",
+					Ldflags:      tt.ldflags,
+					Commit:       tt.commit,
+					HeadCommit:   tt.headCommit,
+					Targets:      []GoTarget{{Package: ".", Binary: "tool", InstallPath: "bin"}},
+				},
+			}
+			got, err := Generate(f, "")
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			if tt.want != "" && !strings.Contains(got, tt.want) {
+				t.Errorf("formula missing %q:\n%s", tt.want, got)
+			}
+			if tt.absent != "" && strings.Contains(got, tt.absent) {
+				t.Errorf("formula must not contain %q:\n%s", tt.absent, got)
+			}
+		})
+	}
+}
+
+func TestGenerateSourceBuildOmitsStdGoArgsDefaults(t *testing.T) {
+	tests := []struct {
+		name    string
+		formula string
+		targets []GoTarget
+		want    string
+	}{
+		{
+			name:    "single bin target matching the formula name omits output",
+			formula: "tool",
+			targets: []GoTarget{{Package: ".", Binary: "tool", InstallPath: "bin"}},
+			want:    `    system "go", "build", *std_go_args(), "."`,
+		},
+		{
+			name:    "binary differing from the formula name keeps output",
+			formula: "tool",
+			targets: []GoTarget{{Package: "./cmd/cli", Binary: "cli", InstallPath: "bin"}},
+			want:    `    system "go", "build", *std_go_args(output: bin/"cli"), "./cmd/cli"`,
+		},
+		{
+			name:    "empty install path is treated as bin",
+			formula: "tool",
+			targets: []GoTarget{{Package: ".", Binary: "tool"}},
+			want:    `    system "go", "build", *std_go_args(), "."`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := &Formula{
+				Name:     tt.formula,
+				URL:      "https://example.com/tool-1.0.0.tar.gz",
+				Binaries: []BinaryInstall{{Name: "tool"}},
+				Build:    &SourceBuild{Targets: tt.targets},
+			}
+			got, err := Generate(f, "")
+			if err != nil {
+				t.Fatalf("Generate: %v", err)
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("formula missing %q:\n%s", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestGenerateSourceBuildNoTargets(t *testing.T) {
+	f := &Formula{
+		Name:     "tool",
+		URL:      "https://example.com/tool-1.0.0.tar.gz",
+		Binaries: []BinaryInstall{{Name: "tool"}},
+		Build:    &SourceBuild{GoDependency: "go"},
+	}
+	if _, err := Generate(f, ""); err == nil {
+		t.Fatal("expected error for a source-build block without targets")
+	}
+}
+
+func TestGenerateLegacyInstallBlock(t *testing.T) {
+	f := &Formula{
+		Name:         "tool",
+		URL:          "https://example.com/tool-1.0.0.tar.gz",
+		Dependencies: []string{"git", "jq"},
+		Binaries:     []BinaryInstall{{Name: "tool"}},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	// Runtime dependencies form one group even without a source build.
+	if want := "\n  depends_on \"git\"\n  depends_on \"jq\"\n"; !strings.Contains(got, want) {
+		t.Errorf("dependencies not grouped:\n%s", got)
+	}
+	if want := `    bin.install "tool"`; !strings.Contains(got, want) {
+		t.Errorf("formula missing %q:\n%s", want, got)
+	}
+	for _, forbidden := range []string{"depends_on \"go\"", "std_go_args", "ldflags"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("legacy formula must not contain %q:\n%s", forbidden, got)
+		}
+	}
+}
+
 func TestGenerateMinimal(t *testing.T) {
 	f := &Formula{
 		Name:     "tool",

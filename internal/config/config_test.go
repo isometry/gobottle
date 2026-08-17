@@ -89,6 +89,118 @@ func TestSetDefaults(t *testing.T) {
 			expected: "Tap.Token should default to Registry.Token",
 		},
 		{
+			name:  "trimpath defaults on",
+			input: &Config{},
+			check: func(c *Config) bool {
+				return c.Source.Build.TrimpathEnabled()
+			},
+			expected: "Source.Build.Trimpath should default to true",
+		},
+		{
+			name:  "explicit trimpath false is preserved",
+			input: &Config{Source: SourceConfig{Build: BuildConfig{Trimpath: boolPtr(false)}}},
+			check: func(c *Config) bool {
+				return !c.Source.Build.TrimpathEnabled()
+			},
+			expected: "an explicit trimpath: false should survive SetDefaults",
+		},
+		{
+			name:  "head defaults on when a git URL is derivable",
+			input: &Config{Source: SourceConfig{Owner: "acme", Repo: "mytool"}},
+			check: func(c *Config) bool {
+				return c.Formula.Head != nil && *c.Formula.Head
+			},
+			expected: "Formula.Head should default to true with owner/repo set",
+		},
+		{
+			name:  "head defaults off without a derivable git URL",
+			input: &Config{},
+			check: func(c *Config) bool {
+				return c.Formula.Head != nil && !*c.Formula.Head
+			},
+			expected: "Formula.Head should default to false without owner/repo",
+		},
+		{
+			name: "explicit head false is preserved",
+			input: &Config{
+				Formula: FormulaConfig{Head: boolPtr(false)},
+				Source:  SourceConfig{Owner: "acme", Repo: "mytool"},
+			},
+			check: func(c *Config) bool {
+				return c.Formula.Head != nil && !*c.Formula.Head
+			},
+			expected: "an explicit head: false should survive SetDefaults",
+		},
+		{
+			name:  "formula build is enabled and depends on go by default",
+			input: &Config{},
+			check: func(c *Config) bool {
+				return c.Formula.Build.IsEnabled() && c.Formula.Build.Go == "go"
+			},
+			expected: "Formula.Build should default to enabled with a 'go' dependency",
+		},
+		{
+			name:  "formula build disabled is preserved",
+			input: &Config{Formula: FormulaConfig{Build: FormulaBuildConfig{Enabled: boolPtr(false)}}},
+			check: func(c *Config) bool {
+				return !c.Formula.Build.IsEnabled()
+			},
+			expected: "an explicit formula.build.enabled: false should survive SetDefaults",
+		},
+		{
+			name: "formula build inherits the source build recipe",
+			input: &Config{
+				Source: SourceConfig{
+					Type: "go",
+					Build: BuildConfig{
+						Packages: []string{"./cmd/mytool"},
+						Ldflags:  "-s -w -X main.version={{.Version}}",
+						Flags:    []string{"-mod=vendor"},
+						Env:      []string{"FOO=bar"},
+						ModDir:   "src",
+					},
+				},
+			},
+			check: func(c *Config) bool {
+				b := c.Formula.Build
+				return len(b.Packages) == 1 && b.Packages[0] == "./cmd/mytool" &&
+					b.Ldflags == "-s -w -X main.version={{.Version}}" &&
+					len(b.Flags) == 1 && b.Flags[0] == "-mod=vendor" &&
+					len(b.Env) == 1 && b.Env[0] == "FOO=bar" &&
+					b.ModDir == "src"
+			},
+			expected: "Formula.Build should inherit packages/ldflags/flags/env/mod_dir from source.build",
+		},
+		{
+			name: "explicit formula build overrides the source build",
+			input: &Config{
+				Formula: FormulaConfig{Build: FormulaBuildConfig{
+					Go:       "go@1.23",
+					Packages: []string{"./cmd/other"},
+					Ldflags:  "-X main.v={{.Version}}",
+				}},
+				Source: SourceConfig{Build: BuildConfig{
+					Packages: []string{"./cmd/mytool"},
+					Ldflags:  "-s -w",
+				}},
+			},
+			check: func(c *Config) bool {
+				b := c.Formula.Build
+				return b.Go == "go@1.23" &&
+					len(b.Packages) == 1 && b.Packages[0] == "./cmd/other" &&
+					b.Ldflags == "-X main.v={{.Version}}"
+			},
+			expected: "formula.build keys should win over source.build",
+		},
+		{
+			name:  "formula build packages stay empty when neither section sets them",
+			input: &Config{},
+			check: func(c *Config) bool {
+				return len(c.Formula.Build.Packages) == 0
+			},
+			expected: "unset packages must stay empty so formula generation can tell unset from explicit",
+		},
+		{
 			name: "existing values are preserved",
 			input: &Config{
 				Source: SourceConfig{
