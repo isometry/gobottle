@@ -20,6 +20,15 @@ const (
 	MinSupportedMacOSMajor = 12 // Monterey
 )
 
+var (
+	commentRegex         = regexp.MustCompile(`(?m)#.*$`)
+	symbolsLiteralRegex  = regexp.MustCompile(`SYMBOLS\s*=\s*(?:T\.let\()?\s*\{([^}]+)\}`)
+	symbolsExceptRegex   = regexp.MustCompile(`SYMBOLS\s*=\s*(?:T\.let\()?\s*RELEASES\.except\(([^)]*)\)`)
+	releasesLiteralRegex = regexp.MustCompile(`RELEASES\s*=\s*(?:T\.let\()?\s*\{([^}]+)\}`)
+	symbolRegex          = regexp.MustCompile(`:(\w+)`)
+	entryRegex           = regexp.MustCompile(`(\w+):\s*"([\d.]+)"`)
+)
+
 // Discoverer fetches current platform information from Homebrew's source
 type Discoverer struct {
 	httpClient *http.Client
@@ -103,29 +112,46 @@ func (d *Discoverer) fetchFromHomebrew(ctx context.Context) (*PlatformInfo, erro
 	return parseVersionRb(string(body))
 }
 
-// parseVersionRb parses Homebrew's macos_version.rb to extract macOS versions
+// parseVersionRb parses Homebrew's macos_version.rb to extract the macOS
+// versions brew currently supports. Two layouts have existed:
+//
+//	SYMBOLS = T.let({ tahoe: "26", sequoia: "15", … }.freeze, …)      (literal)
+//	RELEASES = T.let({ golden_gate: "27", …, el_capitan: "10.11" }.freeze, …)
+//	SYMBOLS = T.let(RELEASES.except(:catalina, :mojave, …).freeze, …)  (current)
+//
+// In the current layout RELEASES keeps every named release for labelling
+// old data, and SYMBOLS is the supported subset.
 func parseVersionRb(content string) (*PlatformInfo, error) {
-	// Look for SYMBOLS hash in the Ruby code
-	// Modern format: SYMBOLS = T.let({ tahoe: "26", sequoia: "15", ... }.freeze, ...)
-	// Legacy format: SYMBOLS = { sequoia: "15", sonoma: "14", ... }.freeze
+	// Ruby comments inside the hashes carry prose; drop them before matching.
+	content = commentRegex.ReplaceAllString(content, "")
 
-	// Try to find the hash content between { and }.freeze or }
-	symbolsRegex := regexp.MustCompile(`SYMBOLS\s*=\s*(?:T\.let\()?\s*\{([^}]+)\}`)
-	match := symbolsRegex.FindStringSubmatch(content)
-	if match == nil {
+	var symbolsContent string
+	excluded := map[string]bool{}
+	if m := symbolsLiteralRegex.FindStringSubmatch(content); m != nil {
+		symbolsContent = m[1]
+	} else if m := symbolsExceptRegex.FindStringSubmatch(content); m != nil {
+		for _, sym := range symbolRegex.FindAllStringSubmatch(m[1], -1) {
+			excluded[sym[1]] = true
+		}
+		r := releasesLiteralRegex.FindStringSubmatch(content)
+		if r == nil {
+			return nil, fmt.Errorf("SYMBOLS derives from RELEASES but no RELEASES hash was found in macos_version.rb")
+		}
+		symbolsContent = r[1]
+	} else {
 		return nil, fmt.Errorf("could not find SYMBOLS hash in macos_version.rb")
 	}
 
-	symbolsContent := match[1]
-
 	// Parse individual entries: "symbol: \"version\"" (handles both integer and decimal versions)
-	entryRegex := regexp.MustCompile(`(\w+):\s*"([\d.]+)"`)
 	entries := entryRegex.FindAllStringSubmatch(symbolsContent, -1)
 
 	var versions []MacOSVersion
 	for _, entry := range entries {
 		symbol := entry[1]
 		versionStr := entry[2]
+		if excluded[symbol] {
+			continue
+		}
 
 		// Parse version - could be "15" or "10.15"
 		var major int
