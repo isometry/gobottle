@@ -12,8 +12,9 @@ import (
 // fields — substituting Ruby interpolations for the build-time values, then
 // splits the result into %W[] tokens:
 //
-//	{{.Version}} -> #{version}      {{.Tag}}    -> v#{version}
-//	{{.Date}}    -> #{time.iso8601} {{.Commit}} -> #{<commitExpr>}
+//	{{.Version}} -> #{version}      {{.Tag}}         -> v#{version}
+//	{{.Date}}    -> #{time.iso8601} {{.Commit}}      -> #{<commitExpr>}
+//	                                {{.ShortCommit}} -> #{<commitExpr>[0,7]}
 //
 // commitExpr is the Ruby expression yielding the commit (typically the
 // "commit" local computed by SourceBuild.CommitLocal).
@@ -39,15 +40,17 @@ func RubyLdflags(tmplText, commitExpr string) ([]string, error) {
 	}
 
 	data := struct {
-		Version string
-		Commit  string
-		Date    string
-		Tag     string
+		Version     string
+		Commit      string
+		ShortCommit string
+		Date        string
+		Tag         string
 	}{
-		Version: "#{version}",
-		Commit:  "#{" + commitExpr + "}",
-		Date:    "#{time.iso8601}",
-		Tag:     "v#{version}",
+		Version:     "#{version}",
+		Commit:      "#{" + commitExpr + "}",
+		ShortCommit: "#{" + commitExpr + "[0,7]}", // no spaces: %W[] splits on whitespace
+		Date:        "#{time.iso8601}",
+		Tag:         "v#{version}",
 	}
 
 	var buf bytes.Buffer

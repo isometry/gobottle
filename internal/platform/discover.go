@@ -161,7 +161,7 @@ func parseVersionRb(content string) (*PlatformInfo, error) {
 
 	return &PlatformInfo{
 		MacOSVersions: versions,
-		LinuxArches:   []string{"x86_64", "aarch64"},
+		LinuxArches:   []string{"x86_64", "arm64"},
 	}, nil
 }
 
@@ -173,7 +173,7 @@ func DefaultPlatformInfo() *PlatformInfo {
 			{Major: 15, Symbol: "sequoia"},
 			{Major: 14, Symbol: "sonoma"},
 		},
-		LinuxArches: []string{"x86_64", "aarch64"},
+		LinuxArches: []string{"x86_64", "arm64"},
 	}
 }
 

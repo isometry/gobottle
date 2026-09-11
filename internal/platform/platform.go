@@ -31,7 +31,7 @@ func (v MacOSVersion) String() string {
 // PlatformInfo holds discovered platform information
 type PlatformInfo struct {
 	MacOSVersions []MacOSVersion // Supported macOS versions (newest first)
-	LinuxArches   []string       // e.g., ["x86_64", "aarch64"]
+	LinuxArches   []string       // e.g., ["x86_64", "arm64"]
 }
 
 // GetPlatformsForOS returns the Homebrew platform tag for a given OS/arch.
@@ -96,28 +96,42 @@ func (pi *PlatformInfo) AllPlatforms() []Platform {
 	return platforms
 }
 
-// goArchToHomebrewArch converts Go arch to Homebrew arch
+// goArchToHomebrewArch converts Go arch to the arch component of a Homebrew
+// bottle tag. Linux ARM is "arm64" (arm64_linux), as brew itself bottles it;
+// the older "aarch64_linux" spelling is only accepted for backwards
+// compatibility (Utils::Bottles::Tag#to_unstandardized_sym).
 func goArchToHomebrewArch(goarch string) string {
 	switch goarch {
 	case "amd64":
 		return "x86_64"
 	case "arm64":
-		return "aarch64"
+		return "arm64"
 	default:
 		return ""
 	}
 }
 
-// homebrewArchToGoArch converts Homebrew arch to Go arch
+// homebrewArchToGoArch converts a Homebrew bottle-tag arch to Go arch,
+// accepting the legacy aarch64 spelling.
 func homebrewArchToGoArch(arch string) string {
 	switch arch {
 	case "x86_64":
 		return "amd64"
-	case "aarch64":
+	case "arm64", "aarch64":
 		return "arm64"
 	default:
 		return ""
 	}
+}
+
+// NormalizeTag maps legacy bottle tag spellings onto the ones gobottle
+// emits (aarch64_linux -> arm64_linux), so platform filters written against
+// older releases keep matching.
+func NormalizeTag(tag string) string {
+	if tag == "aarch64_linux" {
+		return "arm64_linux"
+	}
+	return tag
 }
 
 // ParsePlatformTag parses a Homebrew platform tag into OS, arch, and version
@@ -146,11 +160,11 @@ func FilterPlatforms(platforms []Platform, include, exclude []string) []Platform
 	// Build lookup maps
 	includeMap := make(map[string]bool)
 	for _, p := range include {
-		includeMap[p] = true
+		includeMap[NormalizeTag(p)] = true
 	}
 	excludeMap := make(map[string]bool)
 	for _, p := range exclude {
-		excludeMap[p] = true
+		excludeMap[NormalizeTag(p)] = true
 	}
 
 	var result []Platform

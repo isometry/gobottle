@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -225,3 +227,93 @@ func TestFormulaModelHead(t *testing.T) {
 		})
 	}
 }
+
+func TestFormulaModelHeadRequiresSourceBuild(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*config.Config)
+	}{
+		{
+			name: "explicit head with the source build disabled",
+			mutate: func(c *config.Config) {
+				c.Formula.Head = boolPtr(true)
+				c.Formula.Build.Enabled = boolPtr(false)
+			},
+		},
+		{
+			name: "multi-binary fallback to bin.install",
+			mutate: func(c *config.Config) {
+				c.Source.Build.Packages = nil
+				c.Binaries = []config.BinaryConfig{{Name: "mytool"}, {Name: "helper"}}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig(t, tt.mutate)
+			model, _, err := formulaModel(cfg, "abc123")
+			if err != nil {
+				t.Fatalf("formulaModel: %v", err)
+			}
+			if model.Build != nil {
+				t.Fatalf("expected the legacy bin.install block, got %+v", model.Build)
+			}
+			if model.Head != nil {
+				t.Errorf("head stanza %+v emitted although the install block cannot build a checkout", model.Head)
+			}
+		})
+	}
+}
+
+func TestFormulaSourceBuildDropsTrimpath(t *testing.T) {
+	cfg := baseConfig(t, func(c *config.Config) {
+		c.Source.Build.Flags = []string{"-trimpath", "-mod=vendor"}
+		c.Source.Build.Tags = []string{"netgo"}
+	})
+	build, err := formulaSourceBuild(cfg, "abc123", true)
+	if err != nil {
+		t.Fatalf("formulaSourceBuild: %v", err)
+	}
+	if len(build.Flags) != 1 || build.Flags[0] != "-mod=vendor" {
+		t.Errorf("Flags = %q, want -trimpath dropped (std_go_args adds it)", build.Flags)
+	}
+	if len(build.Tags) != 1 || build.Tags[0] != "netgo" {
+		t.Errorf("Tags = %q, want inherited from source.build.tags", build.Tags)
+	}
+}
+
+func TestHasMainPackage(t *testing.T) {
+	dir := t.TempDir()
+	write := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("lib.go", "package lib\n")
+	write("lib_test.go", "package main\n") // tests don't count
+	write("cmd/tool/main.go", "package main\n\nfunc main() {}\n")
+	write("cmd/broken/main.go", "not go\n")
+
+	tests := []struct {
+		pkg  string
+		want bool
+	}{
+		{".", false},
+		{"./cmd/tool", true},
+		{"./cmd/broken", false},
+		{"./cmd/missing", true},            // unreadable: assume fine
+		{"github.com/acme/tool/cmd", true}, // import path: not checked
+	}
+	for _, tt := range tests {
+		if got := hasMainPackage(dir, tt.pkg); got != tt.want {
+			t.Errorf("hasMainPackage(%q) = %v, want %v", tt.pkg, got, tt.want)
+		}
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }

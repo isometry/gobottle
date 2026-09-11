@@ -50,6 +50,17 @@ gobottle ≥0.8 closes the gap without giving up bottles. The generated
 `--HEAD` both work, while everyone else still gets a poured bottle.
 Nothing to migrate: the recipe is inherited from `source.build`, and
 `formula.build.*` overrides it if the source build should differ.
+`gobottle init` fills `source.build` in from the goreleaser `builds[0]`
+entry (`main`, `ldflags`, `flags`, `env`, `tags`, `dir`), translating the
+template vars — `{{ .Version }}`, `{{ .Tag }}`, `{{ .Commit }}` /
+`{{ .FullCommit }}`, `{{ .ShortCommit }}`, `{{ .Date }}` /
+`{{ .CommitDate }}` — into gobottle's `{{.Version}}`, `{{.Tag}}`,
+`{{.Commit}}`, `{{.ShortCommit}}`, `{{.Date}}`. `-trimpath` is dropped
+(`source.build.trimpath` defaults on) and `CGO_ENABLED` becomes
+`source.build.cgo_enabled`. Anything else (`{{ .Env.X }}`,
+`{{ .CommitTimestamp }}`, …) is warned about and left out: set
+`source.build.ldflags` by hand in that case, or a source build will carry
+no version information (gobottle warns about that too).
 
 ## Before / after
 

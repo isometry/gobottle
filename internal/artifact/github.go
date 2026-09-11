@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/go-github/v88/github"
+	"github.com/google/go-github/v91/github"
 )
 
 // GitHubSource fetches artifacts from GitHub releases

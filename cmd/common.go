@@ -2,7 +2,10 @@ package cmd
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -126,7 +129,7 @@ func formulaSourceBuild(cfg *config.Config, commit string, head bool) (*formula.
 	packages := fb.Packages
 	if len(packages) == 0 {
 		if len(cfg.Binaries) > 1 {
-			warn("formula.build.packages is unset and %d binaries are configured - the generated formula falls back to bin.install and cannot build from source", len(cfg.Binaries))
+			warn("formula.build.packages is unset and %d binaries are configured - the generated formula falls back to bin.install and cannot build from source (no head stanza)", len(cfg.Binaries))
 			return nil, nil
 		}
 		packages = []string{"."}
@@ -141,6 +144,9 @@ func formulaSourceBuild(cfg *config.Config, commit string, head bool) (*formula.
 			installPath = cfg.Binaries[i].InstallPath
 		}
 		targets[i] = formula.GoTarget{Package: pkg, Binary: names[i], InstallPath: installPath}
+		if !hasMainPackage(fb.ModDir, pkg) {
+			warn("formula.build.packages: %q contains no main package - set source.build.packages (e.g. ./cmd/%s) or the source build will fail", pkg, names[i])
+		}
 	}
 
 	// CGO_ENABLED is derived from source.build so the source build matches
@@ -162,6 +168,19 @@ func formulaSourceBuild(cfg *config.Config, commit string, head bool) (*formula.
 	if err != nil {
 		return nil, err
 	}
+	if len(ldflags) == 0 {
+		warn("formula source build has no ldflags - version/commit will be empty for --build-from-source and --HEAD; set source.build.ldflags")
+	}
+
+	// std_go_args supplies -trimpath itself (and honours --debug-symbols), so
+	// forwarding it would only duplicate it — the same reason RubyLdflags
+	// drops bare -s/-w.
+	var flags []string
+	for _, f := range fb.Flags {
+		if f != "-trimpath" {
+			flags = append(flags, f)
+		}
+	}
 
 	return &formula.SourceBuild{
 		GoDependency: fb.Go,
@@ -171,9 +190,40 @@ func formulaSourceBuild(cfg *config.Config, commit string, head bool) (*formula.
 		Commit:       commit,
 		HeadCommit:   head,
 		Tags:         fb.Tags,
-		Flags:        fb.Flags,
+		Flags:        flags,
 		Targets:      targets,
 	}, nil
+}
+
+// hasMainPackage reports whether the relative package pkg (resolved under
+// modDir) contains a non-test Go file declaring `package main`. Packages
+// given as import paths, and directories that cannot be read, are assumed
+// fine: the check exists to catch the silent "." default pointing at a
+// library root, not to replace the compiler.
+func hasMainPackage(modDir, pkg string) bool {
+	if pkg != "." && !strings.HasPrefix(pkg, "./") {
+		return true
+	}
+	if modDir == "" {
+		modDir = "."
+	}
+	dir := filepath.Join(modDir, pkg)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	fset := token.NewFileSet()
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		f, err := parser.ParseFile(fset, filepath.Join(dir, name), nil, parser.PackageClauseOnly)
+		if err == nil && f.Name.Name == "main" {
+			return true
+		}
+	}
+	return false
 }
 
 // formulaModel maps the formula config onto the generator model.
@@ -207,12 +257,19 @@ func formulaModel(cfg *config.Config, commit string) (*formula.Formula, string, 
 	}
 
 	// The head spec is only buildable if the install block knows how to
-	// compile a git checkout, hence the build.head? branch on the commit.
+	// compile a git checkout, hence the build.head? branch on the commit —
+	// and no head stanza at all when the block falls back to bin.install.
 	build, err := formulaSourceBuild(cfg, commit, model.Head != nil)
 	if err != nil {
 		return nil, "", err
 	}
 	model.Build = build
+	if build == nil && model.Head != nil {
+		if !cfg.Formula.Build.IsEnabled() {
+			warn("head stanza omitted: formula.build.enabled is false, so the install block cannot build a git checkout")
+		}
+		model.Head = nil
+	}
 
 	tmpl := ""
 	if f.Template != "" {
@@ -278,6 +335,7 @@ func createGoSource(cfg *config.Config, targets []artifact.BuildTarget) (artifac
 	return artifact.NewGoSource(artifact.GoSourceConfig{
 		Packages:   cfg.Source.Build.Packages,
 		Ldflags:    cfg.Source.Build.Ldflags,
+		Tags:       cfg.Source.Build.Tags,
 		Env:        cfg.Source.Build.Env,
 		CGOEnabled: cfg.Source.Build.CGOEnabled,
 		Trimpath:   cfg.Source.Build.TrimpathEnabled(),

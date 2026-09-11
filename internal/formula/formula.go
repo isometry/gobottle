@@ -1,6 +1,10 @@
 package formula
 
-import "strings"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // Formula is the complete model from which a Homebrew formula is generated.
 // gobottle owns the formula outright: every publish renders it from this
@@ -131,11 +135,12 @@ func (b *SourceBuild) LdflagLines() []string {
 }
 
 // usesCommit reports whether the rendered ldflags interpolate the commit
-// local. RubyLdflags names it "commit" (its default commitExpr), so this pair
-// must be kept in step.
+// local, either whole (#{commit}) or sliced (#{commit[0,7]} for
+// {{.ShortCommit}}). RubyLdflags names it "commit" (its default commitExpr),
+// so this pair must be kept in step.
 func (b *SourceBuild) usesCommit() bool {
 	for _, tok := range b.Ldflags {
-		if strings.Contains(tok, "#{commit}") {
+		if strings.Contains(tok, "#{commit}") || strings.Contains(tok, "#{commit[") {
 			return true
 		}
 	}
@@ -206,4 +211,50 @@ type BottleSpec struct {
 	Platform string // e.g. "arm64_sonoma", "x86_64_linux"
 	SHA256   string // bottle tarball SHA256
 	Cellar   string // e.g. ":any_skip_relocation" or an absolute path
+}
+
+// bottleGroup ranks a bottle tag the way Homebrew's BottleOrder cop does:
+// ARM macOS, Intel macOS, ARM Linux, Intel Linux.
+func bottleGroup(platform string) int {
+	switch {
+	case platform == "arm64_linux" || platform == "aarch64_linux":
+		return 2
+	case strings.HasPrefix(platform, "arm64"):
+		return 0
+	case strings.HasSuffix(platform, "_linux"):
+		return 3
+	default:
+		return 1
+	}
+}
+
+// SortBottles orders the bottle block canonically (see bottleGroup), keeping
+// the relative order within each group (newest macOS first, as discovered).
+func (f *Formula) SortBottles() {
+	sort.SliceStable(f.Bottles, func(i, j int) bool {
+		return bottleGroup(f.Bottles[i].Platform) < bottleGroup(f.Bottles[j].Platform)
+	})
+}
+
+// BottleLines renders the sha256 lines of the bottle block with the tag and
+// digest columns aligned, as `brew audit --strict` (BottleTagIndentation,
+// BottleDigestIndentation) requires:
+//
+//	sha256 cellar: :any,                 arm64_sonoma: "…"
+//	sha256 cellar: :any_skip_relocation, x86_64_linux: "…"
+func (f *Formula) BottleLines() []string {
+	cellarWidth, tagWidth := 0, 0
+	for _, b := range f.Bottles {
+		cellarWidth = max(cellarWidth, len(cellarValue(b.Cellar)))
+		tagWidth = max(tagWidth, len(b.Platform))
+	}
+	lines := make([]string, len(f.Bottles))
+	for i, b := range f.Bottles {
+		cellar := cellarValue(b.Cellar)
+		lines[i] = fmt.Sprintf("sha256 cellar: %s,%s %s:%s %s",
+			cellar, strings.Repeat(" ", cellarWidth-len(cellar)),
+			b.Platform, strings.Repeat(" ", tagWidth-len(b.Platform)),
+			quoteRuby(b.SHA256))
+	}
+	return lines
 }

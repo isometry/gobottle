@@ -132,6 +132,25 @@ func TestSetDefaults(t *testing.T) {
 			expected: "an explicit head: false should survive SetDefaults",
 		},
 		{
+			name: "head defaults off when the source build is disabled",
+			input: &Config{
+				Formula: FormulaConfig{Build: FormulaBuildConfig{Enabled: boolPtr(false)}},
+				Source:  SourceConfig{Owner: "acme", Repo: "mytool"},
+			},
+			check: func(c *Config) bool {
+				return c.Formula.Head != nil && !*c.Formula.Head
+			},
+			expected: "Formula.Head should default to false when formula.build.enabled is false (bin.install cannot build --HEAD)",
+		},
+		{
+			name:  "formula build inherits source build tags",
+			input: &Config{Source: SourceConfig{Build: BuildConfig{Tags: []string{"netgo"}}}},
+			check: func(c *Config) bool {
+				return len(c.Formula.Build.Tags) == 1 && c.Formula.Build.Tags[0] == "netgo"
+			},
+			expected: "Formula.Build.Tags should inherit source.build.tags",
+		},
+		{
 			name:  "formula build is enabled and depends on go by default",
 			input: &Config{},
 			check: func(c *Config) bool {

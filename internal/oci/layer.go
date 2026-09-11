@@ -37,9 +37,9 @@ func newBottleLayer(b *bottle.Bottle) (*bottleLayer, error) {
 	}, nil
 }
 
-func (l *bottleLayer) Digest() (v1.Hash, error)          { return l.digest, nil }
-func (l *bottleLayer) DiffID() (v1.Hash, error)          { return l.diffID, nil }
-func (l *bottleLayer) Size() (int64, error)              { return l.size, nil }
+func (l *bottleLayer) Digest() (v1.Hash, error) { return l.digest, nil }
+func (l *bottleLayer) DiffID() (v1.Hash, error) { return l.diffID, nil }
+func (l *bottleLayer) Size() (int64, error)     { return l.size, nil }
 func (l *bottleLayer) MediaType() (types.MediaType, error) {
 	return types.OCILayer, nil
 }

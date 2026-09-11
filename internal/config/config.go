@@ -179,8 +179,12 @@ type BuildConfig struct {
 	// Packages to build (e.g., ["./cmd/myapp"])
 	Packages []string `mapstructure:"packages"`
 
-	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})
+	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.ShortCommit}},
+	// {{.Date}}, {{.Tag}})
 	Ldflags string `mapstructure:"ldflags"`
+
+	// Build tags (go build -tags), also applied to the source-built formula
+	Tags []string `mapstructure:"tags"`
 
 	// Extra environment variables for go build, as KEY=value strings.
 	// (A YAML map would lose case: viper lowercases map keys.)
@@ -342,10 +346,11 @@ func (c *Config) SetDefaults() {
 		c.Formula.HeadBranch = "main"
 	}
 
-	// The head spec defaults on whenever a git URL is derivable: the generated
-	// install block compiles from source, so `brew install --HEAD` works.
+	// The head spec defaults on whenever a git URL is derivable and the
+	// install block compiles from source (a bin.install block cannot build a
+	// git checkout, so `brew install --HEAD` would fail).
 	if c.Formula.Head == nil {
-		c.Formula.Head = boolPtr(c.GitURL() != "")
+		c.Formula.Head = boolPtr(c.GitURL() != "" && c.Formula.Build.IsEnabled())
 	}
 
 	// The formula's source-build recipe inherits from source.build: the same
@@ -364,6 +369,9 @@ func (c *Config) SetDefaults() {
 	}
 	if len(c.Formula.Build.Flags) == 0 {
 		c.Formula.Build.Flags = c.Source.Build.Flags
+	}
+	if len(c.Formula.Build.Tags) == 0 {
+		c.Formula.Build.Tags = c.Source.Build.Tags
 	}
 	if len(c.Formula.Build.Env) == 0 {
 		c.Formula.Build.Env = c.Source.Build.Env

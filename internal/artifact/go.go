@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
@@ -25,8 +26,12 @@ type GoSourceConfig struct {
 	// Packages to build (e.g., ["./cmd/myapp"])
 	Packages []string
 
-	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})
+	// Ldflags template (supports {{.Version}}, {{.Commit}}, {{.ShortCommit}},
+	// {{.Date}}, {{.Tag}})
 	Ldflags string
+
+	// Build tags, passed as a single -tags argument
+	Tags []string
 
 	// Extra environment variables for go build, as KEY=value strings
 	Env []string
@@ -254,27 +259,26 @@ func (s *GoSource) buildTarget(ctx context.Context, target BuildTarget, ldflags 
 	}, nil
 }
 
-// goBuild executes go build for a single target
-func (s *GoSource) goBuild(ctx context.Context, target BuildTarget, pkg, outputPath, ldflags string) error {
+// buildArgs assembles the `go build` argument list for one package:
+// -trimpath, -tags, -ldflags, the extra flags, then -o and the package.
+func (s *GoSource) buildArgs(pkg, outputPath, ldflags string) []string {
 	args := []string{"build"}
-
-	// Add -trimpath for reproducible builds
 	if s.config.Trimpath {
 		args = append(args, "-trimpath")
 	}
-
-	// Add ldflags
+	if len(s.config.Tags) > 0 {
+		args = append(args, "-tags", strings.Join(s.config.Tags, ","))
+	}
 	if ldflags != "" {
 		args = append(args, "-ldflags", ldflags)
 	}
-
-	// Add extra flags
 	args = append(args, s.config.Flags...)
+	return append(args, "-o", outputPath, pkg)
+}
 
-	// Add output path and package
-	args = append(args, "-o", outputPath, pkg)
-
-	cmd := exec.CommandContext(ctx, "go", args...)
+// goBuild executes go build for a single target
+func (s *GoSource) goBuild(ctx context.Context, target BuildTarget, pkg, outputPath, ldflags string) error {
+	cmd := exec.CommandContext(ctx, "go", s.buildArgs(pkg, outputPath, ldflags)...)
 	cmd.Dir = s.config.ModDir
 
 	// Set environment
@@ -307,6 +311,15 @@ func (s *GoSource) goBuild(ctx context.Context, target BuildTarget, pkg, outputP
 	return nil
 }
 
+// ShortCommit abbreviates a commit SHA to the conventional 7 characters
+// (the {{.ShortCommit}} ldflags field; goreleaser's .ShortCommit equivalent).
+func ShortCommit(commit string) string {
+	if len(commit) > 7 {
+		return commit[:7]
+	}
+	return commit
+}
+
 // renderLdflags renders the ldflags template with build variables
 func (s *GoSource) renderLdflags() (string, error) {
 	if s.config.Ldflags == "" {
@@ -319,15 +332,17 @@ func (s *GoSource) renderLdflags() (string, error) {
 	}
 
 	data := struct {
-		Version string
-		Commit  string
-		Date    string
-		Tag     string
+		Version     string
+		Commit      string
+		ShortCommit string
+		Date        string
+		Tag         string
 	}{
-		Version: s.config.Version,
-		Commit:  s.config.Commit,
-		Date:    s.config.Date.Format(time.RFC3339),
-		Tag:     s.config.Tag,
+		Version:     s.config.Version,
+		Commit:      s.config.Commit,
+		ShortCommit: ShortCommit(s.config.Commit),
+		Date:        s.config.Date.Format(time.RFC3339),
+		Tag:         s.config.Tag,
 	}
 
 	var buf bytes.Buffer

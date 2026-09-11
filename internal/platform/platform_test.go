@@ -10,7 +10,7 @@ func TestGetPlatformsForOS(t *testing.T) {
 			{Major: 15, Symbol: "sequoia"},
 			{Major: 14, Symbol: "sonoma"},
 		},
-		LinuxArches: []string{"x86_64", "aarch64"},
+		LinuxArches: []string{"x86_64", "arm64"},
 	}
 
 	t.Run("darwin arm64 returns oldest version only", func(t *testing.T) {
@@ -70,8 +70,8 @@ func TestGetPlatformsForOS(t *testing.T) {
 			t.Errorf("expected 1 platform, got %d", len(platforms))
 			return
 		}
-		if platforms[0].Tag != "aarch64_linux" {
-			t.Errorf("expected tag aarch64_linux, got %q", platforms[0].Tag)
+		if platforms[0].Tag != "arm64_linux" {
+			t.Errorf("expected tag arm64_linux, got %q", platforms[0].Tag)
 		}
 	})
 }
@@ -102,4 +102,29 @@ func TestFilterPlatforms(t *testing.T) {
 			t.Errorf("expected 2 platforms, got %d", len(result))
 		}
 	})
+}
+
+func TestFilterPlatformsLegacyLinuxTag(t *testing.T) {
+	platforms := []Platform{
+		{Tag: "arm64_linux", OS: "linux", Arch: "arm64"},
+		{Tag: "x86_64_linux", OS: "linux", Arch: "amd64"},
+	}
+	// Filters written against older releases (aarch64_linux) keep matching.
+	got := FilterPlatforms(platforms, []string{"aarch64_linux"}, nil)
+	if len(got) != 1 || got[0].Tag != "arm64_linux" {
+		t.Errorf("include aarch64_linux = %+v, want the arm64_linux platform", got)
+	}
+	got = FilterPlatforms(platforms, nil, []string{"aarch64_linux"})
+	if len(got) != 1 || got[0].Tag != "x86_64_linux" {
+		t.Errorf("exclude aarch64_linux = %+v, want only x86_64_linux", got)
+	}
+}
+
+func TestParsePlatformTagLinux(t *testing.T) {
+	for _, tag := range []string{"arm64_linux", "aarch64_linux"} {
+		os, arch, version := ParsePlatformTag(tag)
+		if os != "linux" || arch != "arm64" || version != "" {
+			t.Errorf("ParsePlatformTag(%q) = %q/%q/%q", tag, os, arch, version)
+		}
+	}
 }

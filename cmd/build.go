@@ -57,7 +57,7 @@ func addBuildFlags(cmd *cobra.Command) {
 	cmd.Flags().String("url", "", "source tarball URL (auto-derived from GitHub if not set)")
 	cmd.Flags().String("sha256", "", "source tarball SHA256 (fetched and computed if not set)")
 	cmd.Flags().StringSlice("packages", nil, "Go packages to build (for --source=go), e.g. ./cmd/myapp")
-	cmd.Flags().String("ldflags", "", "ldflags template for go build ({{.Version}}, {{.Commit}}, {{.Date}}, {{.Tag}})")
+	cmd.Flags().String("ldflags", "", "ldflags template for go build ({{.Version}}, {{.Commit}}, {{.ShortCommit}}, {{.Date}}, {{.Tag}})")
 	cmd.Flags().Bool("cgo", false, "enable CGO for go build")
 	cmd.Flags().Int("parallel", 0, "number of parallel go builds (default: CPU count)")
 	cmd.Flags().StringSlice("binaries", nil, "binary names to include (default: formula name)")

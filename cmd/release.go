@@ -199,6 +199,7 @@ func runRelease(ctx context.Context, cfg *config.Config, manifest *Manifest, tap
 	if err != nil {
 		return err
 	}
+	updater.Log = func(msg string) { progress("%s", msg) }
 	sha, err := updater.UpdateFormula(ctx, formulaPath, []byte(content), commitMsg)
 	if err != nil {
 		return fmt.Errorf("failed to commit formula: %w", err)
