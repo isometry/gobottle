@@ -330,4 +330,4 @@ diff <(xxd bottle1.tar.gz) <(xxd bottle2.tar.gz)
 - `darwin/arm64` → `arm64_sonoma` (or current macOS)
 - `darwin/amd64` → `sonoma`
 - `linux/amd64` → `x86_64_linux`
-- `linux/arm64` → `aarch64_linux`
+- `linux/arm64` → `arm64_linux`

@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/go-github/v88/github"
+	"github.com/google/go-github/v91/github"
 )
 
 // Updater updates formulas in a Homebrew tap repository
@@ -13,6 +13,9 @@ type Updater struct {
 	owner  string
 	repo   string
 	branch string
+
+	// Log, when set, receives human progress lines.
+	Log func(string)
 }
 
 // NewUpdater creates a new tap updater
@@ -92,6 +95,19 @@ func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte
 		} else {
 			// File exists, we need the SHA to update it
 			sha = currentFile.SHA
+
+			// Already up to date: a replayed release (after a lost response,
+			// or a re-run of a failed job) must not add an empty commit.
+			if current, err := currentFile.GetContent(); err == nil && current == string(content) {
+				commitSHA, err := u.latestCommitFor(ctx, path)
+				if err != nil {
+					return "", err
+				}
+				if u.Log != nil {
+					u.Log(fmt.Sprintf("%s already up to date on %s/%s@%s (%s)", path, u.owner, u.repo, u.branch, commitSHA))
+				}
+				return commitSHA, nil
+			}
 		}
 	}
 
@@ -113,6 +129,23 @@ func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte
 		commitSHA = *resp.Commit.SHA
 	}
 	return commitSHA, nil
+}
+
+// latestCommitFor returns the SHA of the newest commit on the branch that
+// touched path.
+func (u *Updater) latestCommitFor(ctx context.Context, path string) (string, error) {
+	commits, _, err := u.client.Repositories.ListCommits(ctx, u.owner, u.repo, &github.CommitsListOptions{
+		SHA:         u.branch,
+		Path:        path,
+		ListOptions: github.ListOptions{PerPage: 1},
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to look up the commit for %s: %w", path, err)
+	}
+	if len(commits) == 0 {
+		return "", nil
+	}
+	return commits[0].GetSHA(), nil
 }
 
 // GetFormula fetches the current formula content at the given repo path.

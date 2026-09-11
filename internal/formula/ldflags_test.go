@@ -90,15 +90,16 @@ func TestRubyLdflagsInvalidTemplate(t *testing.T) {
 // re-declared here rather than imported to keep formula free of that
 // dependency; if its fields ever change, this test fails alongside it.
 func TestRubyLdflagsFieldParity(t *testing.T) {
-	const tmplText = "-s -w -X a.Version={{.Version}} -X a.Commit={{.Commit}} -X a.Date={{.Date}} -X a.Tag={{.Tag}}"
+	const tmplText = "-s -w -X a.Version={{.Version}} -X a.Commit={{.Commit}} -X a.Short={{.ShortCommit}} -X a.Date={{.Date}} -X a.Tag={{.Tag}}"
 
 	// Mirrors the anonymous struct in artifact.GoSource.renderLdflags.
 	artifactData := struct {
-		Version string
-		Commit  string
-		Date    string
-		Tag     string
-	}{Version: "1.2.3", Commit: "abc123", Date: "2026-01-01T00:00:00Z", Tag: "v1.2.3"}
+		Version     string
+		Commit      string
+		ShortCommit string
+		Date        string
+		Tag         string
+	}{Version: "1.2.3", Commit: "abc123def", ShortCommit: "abc123d", Date: "2026-01-01T00:00:00Z", Tag: "v1.2.3"}
 
 	tmpl, err := template.New("ldflags").Option("missingkey=error").Parse(tmplText)
 	if err != nil {
@@ -119,6 +120,23 @@ func TestRubyLdflagsFieldParity(t *testing.T) {
 	for _, tok := range tokens {
 		if strings.Contains(tok, "<no value>") {
 			t.Errorf("RubyLdflags left a field unresolved: %q", tok)
+		}
+	}
+}
+
+func TestRubyLdflagsShortCommit(t *testing.T) {
+	tokens, err := RubyLdflags("-X main.commit={{.ShortCommit}} -X main.full={{.Commit}}", "commit")
+	if err != nil {
+		t.Fatalf("RubyLdflags: %v", err)
+	}
+	want := []string{"-X", "main.commit=#{commit[0,7]}", "-X", "main.full=#{commit}"}
+	if strings.Join(tokens, " ") != strings.Join(want, " ") {
+		t.Errorf("tokens = %q, want %q", tokens, want)
+	}
+	// Every token must survive %W[]'s whitespace split intact.
+	for _, tok := range tokens {
+		if strings.ContainsAny(tok, " \t") {
+			t.Errorf("token %q contains whitespace", tok)
 		}
 	}
 }

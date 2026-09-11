@@ -40,8 +40,8 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- if gt .Rebuild 0 }}
     rebuild {{ .Rebuild }}
 {{- end }}
-{{- range .Bottles }}
-    sha256 cellar: {{ cellar .Cellar }}, {{ .Platform }}: {{ quote .SHA256 }}
+{{- range .BottleLines }}
+    {{ . }}
 {{- end }}
   end
 {{- end }}
@@ -168,6 +168,7 @@ func Generate(f *Formula, tmplText string) (string, error) {
 	if f.Build != nil && len(f.Build.Targets) == 0 {
 		return "", fmt.Errorf("formula %s: the source-build install block requires at least one package", f.Name)
 	}
+	f.SortBottles()
 
 	if tmplText == "" {
 		tmplText = defaultTemplate

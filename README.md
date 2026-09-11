@@ -33,11 +33,27 @@ with a Go-template escape hatch for anything not yet modeled.
 
 The generated formula also builds from source: its `def install` emits
 `depends_on "go" => :build` and `system "go", "build", *std_go_args(...)`
-with the ldflags inherited from `source.build`, so
+with the ldflags, tags and flags inherited from `source.build`, so
 `brew install --build-from-source` and `brew install --HEAD` compile
 correctly while everyone else gets a poured bottle. Override it under
 `formula.build`, or set `formula.build.enabled: false` for the older
-bottle-only install block.
+bottle-only install block (the `head` stanza is then omitted, since a
+`bin.install` block cannot build a git checkout). `gobottle init` imports
+the build recipe from an existing goreleaser config so the source build
+reproduces the released binaries.
+
+### Recovering a failed release
+
+`gobottle release` is idempotent: bottles already in the registry are
+re-pushed unchanged and an up-to-date formula is not committed again, so a
+release that failed part-way (say, a GitHub 5xx on the tap commit) is
+simply re-run. Keep `bottles.json` as a workflow artifact and the formula
+step alone can be replayed without rebuilding:
+
+```sh
+gh run download <run-id> -n bottles-manifest-v1.2.3
+GOBOTTLE_TAP_TOKEN=... gobottle release -i bottles.json
+```
 
 ## Installation
 

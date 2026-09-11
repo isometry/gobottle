@@ -109,15 +109,26 @@ release's checksum manifest.
   `generate_completions_from_executable` line is still emitted for
   `--build-from-source` users.
 - **Source-buildable formulae**: the generated `def install` compiles from
-  source — `depends_on "go" => :build`, the ldflags from `source.build`
-  rendered as Ruby interpolations, and `system "go", "build",
-  *std_go_args(...)` — so `brew install --build-from-source` and
+  source — `depends_on "go" => :build`, the ldflags/tags/flags from
+  `source.build` rendered as Ruby interpolations, and `system "go",
+  "build", *std_go_args(...)` — so `brew install --build-from-source` and
   `brew install --HEAD` both work, and the `head` stanza is emitted by
   default. The recipe is inherited from `source.build`, so existing
   configs get it with no edits; override under `formula.build` (or set
-  `formula.build.enabled: false` for the old bottle-only install block).
-  `{{.Commit}}` becomes the release tag's actual commit, with a
-  `build.head?` branch reading the checkout for `--HEAD`.
+  `formula.build.enabled: false` for the old bottle-only install block —
+  the `head` stanza is then omitted, since `bin.install` cannot build a
+  checkout). `{{.Commit}}` becomes the release tag's actual commit
+  (`{{.ShortCommit}}` its 7-char prefix), with a `build.head?` branch
+  reading the checkout for `--HEAD`. gobottle warns when the source build
+  has no ldflags at all (version info would be empty) or when the
+  package it would `go build` holds no `package main`.
+- **goreleaser import at init**: `gobottle init` copies `builds[0]`'s
+  `main`, `ldflags`, `flags`, `env`, `tags` and `dir` from an existing
+  goreleaser config into `source.build` (template vars translated, e.g.
+  `{{ .ShortCommit }}` → `{{.ShortCommit}}`, `{{ .CommitDate }}` →
+  `{{.Date}}`), so a source build reproduces the released binaries even
+  when bottles come from `--source local`. Untranslatable actions such as
+  `{{ .Env.X }}` are warned about and left for you to set by hand.
 - **Tokens**: `GITHUB_TOKEN` authenticates GHCR; `GOBOTTLE_TAP_TOKEN`
   optionally dedicates a token to the tap commit and falls back to the
   standard token when unset. In GitHub Actions the default job token
@@ -209,6 +220,30 @@ bottles are built:
 
 Your users can then verify an installed binary end-to-end:
 `gh attestation verify "$(brew --prefix)/bin/<binary>" --repo <owner>/<repo>`.
+
+**Recovering a failed release:** `gobottle release` is idempotent —
+already-pushed bottles are re-pushed unchanged and an up-to-date formula
+is not committed again — so a run that died after the bottles were
+pushed (a GitHub 5xx on the tap commit, say) is simply re-run. To replay
+only the formula step, keep the manifest as a workflow artifact
+(`if: always()`) and feed it back:
+
+```yaml
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bottles-manifest-${{ github.ref_name }}
+          path: bottles/bottles.json
+          if-no-files-found: ignore
+```
+
+```sh
+gh run download <run-id> -n bottles-manifest-v1.2.3
+GOBOTTLE_TAP_TOKEN=... gobottle release -i bottles.json
+```
+
+Give the attest step `if: ${{ !cancelled() && hashFiles('bottles/*.tar.gz') != '' }}`
+so bottles that reached GHCR are attested even when the tap commit failed.
 
 ## Migrating from goreleaser `brews:`
 

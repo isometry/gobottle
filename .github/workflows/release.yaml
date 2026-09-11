@@ -45,10 +45,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GOBOTTLE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
 
+      - name: Keep the bottles manifest
+        # If the tap commit fails after the bottles were pushed, the
+        # formula step can be replayed without rebuilding:
+        #   gh run download <run-id> -n bottles-manifest-<tag>
+        #   gobottle release -i bottles.json
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bottles-manifest-${{ github.ref_name }}
+          path: bottles/bottles.json
+          if-no-files-found: ignore
+
       - name: Attest release artifacts
         # Subjects cover every distribution surface: release archives and
         # checksums, the raw binaries (verifiable post-install), and the
-        # bottle tarballs brew downloads.
+        # bottle tarballs brew downloads. Runs whenever bottles exist, so
+        # what reached GHCR is attested even if the tap commit failed.
+        if: ${{ !cancelled() && hashFiles('bottles/*.tar.gz') != '' }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |

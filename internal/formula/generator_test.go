@@ -44,7 +44,7 @@ func TestGenerateFull(t *testing.T) {
   bottle do
     root_url "https://ghcr.io/v2/acme/tap"
     rebuild 1
-    sha256 cellar: :any_skip_relocation, arm64_sonoma: "bbbb"
+    sha256 cellar: :any_skip_relocation,                arm64_sonoma: "bbbb"
     sha256 cellar: "/home/linuxbrew/.linuxbrew/Cellar", x86_64_linux: "cccc"
   end
 
@@ -485,5 +485,73 @@ func TestGenerateRawTest(t *testing.T) {
 	}
 	if !strings.Contains(got, `    assert_match "x", shell_output(bin/"x --help")`) {
 		t.Errorf("raw test not rendered:\n%s", got)
+	}
+}
+
+func TestGenerateSourceBuildShortCommit(t *testing.T) {
+	// A {{.ShortCommit}}-only recipe slices the commit local, so the local
+	// must still be emitted.
+	ldflags, err := RubyLdflags("-X main.commit={{.ShortCommit}}", "commit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &Formula{
+		Name:     "mytool",
+		URL:      "https://github.com/acme/mytool/archive/refs/tags/v1.0.0.tar.gz",
+		Binaries: []BinaryInstall{{Name: "mytool"}},
+		Build: &SourceBuild{
+			GoDependency: "go",
+			Ldflags:      ldflags,
+			Commit:       "4cce4f536e0a2a66f5ff0cac763784ed4711afa2",
+			Targets:      []GoTarget{{Package: ".", Binary: "mytool", InstallPath: "bin"}},
+		},
+	}
+	out, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	for _, want := range []string{
+		`    commit = "4cce4f536e0a2a66f5ff0cac763784ed4711afa2"`,
+		`      -X main.commit=#{commit[0,7]}`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("formula missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestGenerateBottleBlockOrderAndAlignment(t *testing.T) {
+	// Bottles arrive in discovery order; the block must come out in
+	// Homebrew's canonical order with aligned tag and digest columns.
+	f := &Formula{
+		Name:     "mytool",
+		URL:      "https://github.com/acme/mytool/archive/refs/tags/v1.0.0.tar.gz",
+		RootURL:  "https://ghcr.io/v2/acme/tap",
+		Binaries: []BinaryInstall{{Name: "mytool"}},
+		Bottles: []BottleSpec{
+			{Platform: "sonoma", SHA256: "1111", Cellar: ":any_skip_relocation"},
+			{Platform: "arm64_sonoma", SHA256: "2222", Cellar: ":any_skip_relocation"},
+			{Platform: "x86_64_linux", SHA256: "3333", Cellar: ":any"},
+			{Platform: "arm64_linux", SHA256: "4444", Cellar: ":any_skip_relocation"},
+			{Platform: "arm64_sequoia", SHA256: "5555", Cellar: ":any_skip_relocation"},
+			{Platform: "sequoia", SHA256: "6666", Cellar: ":any_skip_relocation"},
+		},
+	}
+	out, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	want := `  bottle do
+    root_url "https://ghcr.io/v2/acme/tap"
+    sha256 cellar: :any_skip_relocation, arm64_sonoma:  "2222"
+    sha256 cellar: :any_skip_relocation, arm64_sequoia: "5555"
+    sha256 cellar: :any_skip_relocation, sonoma:        "1111"
+    sha256 cellar: :any_skip_relocation, sequoia:       "6666"
+    sha256 cellar: :any_skip_relocation, arm64_linux:   "4444"
+    sha256 cellar: :any,                 x86_64_linux:  "3333"
+  end
+`
+	if !strings.Contains(out, want) {
+		t.Errorf("bottle block mismatch:\n%s\nwant:\n%s", out, want)
 	}
 }

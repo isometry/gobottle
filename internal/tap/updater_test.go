@@ -2,6 +2,7 @@ package tap
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/google/go-github/v88/github"
+	"github.com/google/go-github/v91/github"
 )
 
 // newTestUpdater returns an Updater backed by an httptest GitHub API stub.
@@ -115,5 +116,82 @@ func TestUpdateFormulaMissingBranchHint(t *testing.T) {
 	want := `branch "topic" does not exist`
 	if got := err.Error(); !strings.Contains(got, want) {
 		t.Errorf("error %q missing hint %q", got, want)
+	}
+}
+
+func TestUpdateFormulaUnchangedSkipsCommit(t *testing.T) {
+	content := "class Mytool < Formula\nend\n"
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/acme/homebrew-tap/git/ref/heads/main", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(github.Reference{Ref: new("refs/heads/main")})
+	})
+	mux.HandleFunc("GET /repos/acme/homebrew-tap/contents/Formula/mytool.rb", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(github.RepositoryContent{
+			Type:     new("file"),
+			Encoding: new("base64"),
+			SHA:      new("blob123"),
+			Content:  new(base64.StdEncoding.EncodeToString([]byte(content))),
+		})
+	})
+	mux.HandleFunc("GET /repos/acme/homebrew-tap/commits", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("path"); got != "Formula/mytool.rb" {
+			t.Errorf("commits listed for path %q", got)
+		}
+		fmt.Fprint(w, `[{"sha":"deadbeef"}]`)
+	})
+	mux.HandleFunc("PUT /repos/acme/homebrew-tap/contents/Formula/mytool.rb", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("unchanged formula must not be committed again")
+	})
+
+	u := newTestUpdater(t, "main", mux)
+	var logged []string
+	u.Log = func(s string) { logged = append(logged, s) }
+	sha, err := u.UpdateFormula(context.Background(), "Formula/mytool.rb", []byte(content), "update")
+	if err != nil {
+		t.Fatalf("UpdateFormula: %v", err)
+	}
+	if sha != "deadbeef" {
+		t.Errorf("commit SHA = %q, want deadbeef (the existing commit)", sha)
+	}
+	if len(logged) != 1 || !strings.Contains(logged[0], "already up to date") {
+		t.Errorf("log = %q", logged)
+	}
+}
+
+func TestUpdateFormulaChangedCommits(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /repos/acme/homebrew-tap/git/ref/heads/main", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(github.Reference{Ref: new("refs/heads/main")})
+	})
+	mux.HandleFunc("GET /repos/acme/homebrew-tap/contents/Formula/mytool.rb", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(github.RepositoryContent{
+			Type:     new("file"),
+			Encoding: new("base64"),
+			SHA:      new("blob123"),
+			Content:  new(base64.StdEncoding.EncodeToString([]byte("old\n"))),
+		})
+	})
+	var put bool
+	mux.HandleFunc("PUT /repos/acme/homebrew-tap/contents/Formula/mytool.rb", func(w http.ResponseWriter, r *http.Request) {
+		put = true
+		var body struct {
+			SHA *string `json:"sha"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.SHA == nil || *body.SHA != "blob123" {
+			t.Errorf("update sent blob sha %v, want blob123", body.SHA)
+		}
+		_ = json.NewEncoder(w).Encode(github.RepositoryContentResponse{
+			Commit: github.Commit{SHA: new("new456")},
+		})
+	})
+
+	u := newTestUpdater(t, "main", mux)
+	sha, err := u.UpdateFormula(context.Background(), "Formula/mytool.rb", []byte("new\n"), "update")
+	if err != nil {
+		t.Fatalf("UpdateFormula: %v", err)
+	}
+	if !put || sha != "new456" {
+		t.Errorf("put = %v, sha = %q", put, sha)
 	}
 }

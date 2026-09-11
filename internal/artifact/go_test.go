@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -600,5 +601,63 @@ func main() {
 	// Verify fetched file exists
 	if _, err := os.Stat(fetchedPath); os.IsNotExist(err) {
 		t.Error("fetched file does not exist")
+	}
+}
+
+func TestShortCommit(t *testing.T) {
+	tests := map[string]string{
+		"4cce4f536e0a2a66f5ff0cac763784ed4711afa2": "4cce4f5",
+		"abc123": "abc123",
+		"":       "",
+	}
+	for in, want := range tests {
+		if got := ShortCommit(in); got != want {
+			t.Errorf("ShortCommit(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestGoSource_RenderLdflagsShortCommit(t *testing.T) {
+	tmpDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmpDir, "go.mod"), []byte("module test\n\ngo 1.21\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewGoSource(GoSourceConfig{
+		Packages: []string{"."},
+		ModDir:   tmpDir,
+		Ldflags:  "-X main.commit={{.ShortCommit}} -X main.full={{.Commit}}",
+		Commit:   "4cce4f536e0a2a66f5ff0cac763784ed4711afa2",
+	})
+	if err != nil {
+		t.Fatalf("NewGoSource: %v", err)
+	}
+	defer source.Close()
+
+	got, err := source.renderLdflags()
+	if err != nil {
+		t.Fatalf("renderLdflags: %v", err)
+	}
+	want := "-X main.commit=4cce4f5 -X main.full=4cce4f536e0a2a66f5ff0cac763784ed4711afa2"
+	if got != want {
+		t.Errorf("renderLdflags = %q, want %q", got, want)
+	}
+}
+
+func TestGoSource_BuildArgs(t *testing.T) {
+	s := &GoSource{config: GoSourceConfig{
+		Trimpath: true,
+		Tags:     []string{"netgo", "osusergo"},
+		Flags:    []string{"-mod=vendor"},
+	}}
+	got := strings.Join(s.buildArgs("./cmd/app", "/out/app", "-s -w"), " ")
+	want := "build -trimpath -tags netgo,osusergo -ldflags -s -w -mod=vendor -o /out/app ./cmd/app"
+	if got != want {
+		t.Errorf("buildArgs = %q, want %q", got, want)
+	}
+
+	s = &GoSource{config: GoSourceConfig{}}
+	got = strings.Join(s.buildArgs(".", "/out/app", ""), " ")
+	if want := "build -o /out/app ."; got != want {
+		t.Errorf("buildArgs (bare) = %q, want %q", got, want)
 	}
 }

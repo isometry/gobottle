@@ -60,7 +60,13 @@ type initFileConfig struct {
 	Source struct {
 		Type  string `yaml:"type"`
 		Build struct {
-			Packages []string `yaml:"packages"`
+			Packages   []string `yaml:"packages"`
+			Ldflags    string   `yaml:"ldflags,omitempty"`
+			Flags      []string `yaml:"flags,omitempty"`
+			Env        []string `yaml:"env,omitempty"`
+			Tags       []string `yaml:"tags,omitempty"`
+			ModDir     string   `yaml:"mod_dir,omitempty"`
+			CGOEnabled bool     `yaml:"cgo_enabled,omitempty"`
 		} `yaml:"build"`
 	} `yaml:"source"`
 
@@ -88,7 +94,10 @@ func runInit(opts *InitOptions) error {
 
 	// Detect values from the environment
 	detectGitRemote(cfg)
-	detectGoReleaser(cfg)
+	imported, err := detectGoReleaser(cfg, ".")
+	if err != nil {
+		return err
+	}
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -104,10 +113,17 @@ func runInit(opts *InitOptions) error {
 # template override, ... are also available).
 #
 # The formula's install block compiles from source (so --build-from-source
-# and --HEAD work), inheriting packages/ldflags/flags/env from source.build;
-# override any of it under formula.build.
-
+# and --HEAD work), inheriting packages/ldflags/flags/env/tags from
+# source.build; override any of it under formula.build.
 `
+	if imported {
+		header += `#
+# source.build was imported from the goreleaser build so that a source
+# build reproduces the released binaries (template vars translated:
+# .ShortCommit -> {{.ShortCommit}}, .CommitDate -> {{.Date}}, ...).
+`
+	}
+	header += "\n"
 
 	if err := os.WriteFile(configPath, []byte(header+string(data)), 0644); err != nil {
 		return fmt.Errorf("failed to write configuration: %w", err)
@@ -116,8 +132,14 @@ func runInit(opts *InitOptions) error {
 	fmt.Fprintf(os.Stderr, "Created %s\n\n", configPath)
 	fmt.Fprintln(os.Stderr, "Next steps:")
 	fmt.Fprintln(os.Stderr, "  1. Edit formula.description (brew audit requires it)")
-	fmt.Fprintln(os.Stderr, "  2. Set GITHUB_TOKEN (write:packages + tap contents:write)")
-	fmt.Fprintln(os.Stderr, "  3. Run: gobottle release --dry-run")
+	if imported {
+		fmt.Fprintln(os.Stderr, "  2. Check source.build (imported from goreleaser) matches how you build")
+		fmt.Fprintln(os.Stderr, "  3. Set GITHUB_TOKEN (write:packages + tap contents:write)")
+		fmt.Fprintln(os.Stderr, "  4. Run: gobottle release --dry-run")
+	} else {
+		fmt.Fprintln(os.Stderr, "  2. Set GITHUB_TOKEN (write:packages + tap contents:write)")
+		fmt.Fprintln(os.Stderr, "  3. Run: gobottle release --dry-run")
+	}
 
 	return nil
 }
@@ -142,57 +164,43 @@ func detectGitRemote(cfg *initFileConfig) {
 	}
 }
 
-// detectGoReleaser extracts project information from GoReleaser config
-func detectGoReleaser(cfg *initFileConfig) {
-	// Try common GoReleaser config locations
-	paths := []string{
-		".goreleaser.yaml",
-		".goreleaser.yml",
-		"goreleaser.yaml",
-		"goreleaser.yml",
-	}
-
-	var configPath string
-	for _, p := range paths {
-		if _, err := os.Stat(p); err == nil {
-			configPath = p
-			break
-		}
-	}
-
-	if configPath == "" {
-		return
-	}
-
-	data, err := os.ReadFile(configPath)
+// detectGoReleaser imports the goreleaser build recipe (binary, main,
+// ldflags, flags, env, tags, dir) from the config found in dir so the
+// scaffolded source.build — and therefore the formula's source build —
+// mirrors the binaries goreleaser releases. It reports whether a goreleaser
+// build was imported; anything untranslatable is warned about and left out.
+func detectGoReleaser(cfg *initFileConfig, dir string) (bool, error) {
+	gr, err := readGoReleaserConfig(dir)
 	if err != nil {
-		return
+		return false, err
+	}
+	if gr == nil {
+		return false, nil
 	}
 
-	// Parse GoReleaser config
-	var grConfig struct {
-		ProjectName string `yaml:"project_name"`
-		Builds      []struct {
-			Binary string `yaml:"binary"`
-			Main   string `yaml:"main"`
-		} `yaml:"builds"`
+	if gr.ProjectName != "" && cfg.Formula.Name == "" {
+		cfg.Formula.Name = gr.ProjectName
+	}
+	if len(gr.Builds) == 0 {
+		return false, nil
 	}
 
-	if err := yaml.Unmarshal(data, &grConfig); err != nil {
-		return
+	// Prefer the GoReleaser binary name for the formula
+	b := importGoReleaserBuild(gr.Builds[0])
+	if b.Binary != "" {
+		cfg.Formula.Name = b.Binary
 	}
-
-	// Prefer the GoReleaser binary/project name for the formula
-	if len(grConfig.Builds) > 0 {
-		if binary := grConfig.Builds[0].Binary; binary != "" {
-			cfg.Formula.Name = binary
-		}
-		if main := grConfig.Builds[0].Main; main != "" {
-			cfg.Source.Build.Packages = []string{main}
-		}
+	if len(b.Packages) > 0 {
+		cfg.Source.Build.Packages = b.Packages
 	}
-	if grConfig.ProjectName != "" && cfg.Formula.Name == "" {
-		cfg.Formula.Name = grConfig.ProjectName
+	cfg.Source.Build.Ldflags = b.Ldflags
+	cfg.Source.Build.Flags = b.Flags
+	cfg.Source.Build.Env = b.Env
+	cfg.Source.Build.Tags = b.Tags
+	cfg.Source.Build.ModDir = b.ModDir
+	cfg.Source.Build.CGOEnabled = b.CGOEnabled
+	for _, w := range b.Warnings {
+		warn("%s", w)
 	}
 
 	// Try to get module path from go.mod for homepage
@@ -201,6 +209,7 @@ func detectGoReleaser(cfg *initFileConfig) {
 			cfg.Formula.Homepage = "https://" + modPath
 		}
 	}
+	return true, nil
 }
 
 // getModulePath extracts the module path from go.mod

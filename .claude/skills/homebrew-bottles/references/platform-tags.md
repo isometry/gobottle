@@ -32,9 +32,12 @@ Complete reference for Homebrew bottle platform tags and cellar paths.
 | Tag | Architecture | Description |
 |-----|--------------|-------------|
 | `x86_64_linux` | x86_64 | Intel/AMD 64-bit |
-| `aarch64_linux` | ARM64 | ARM 64-bit (Raspberry Pi 4+, etc.) |
+| `arm64_linux` | ARM64 | ARM 64-bit (Raspberry Pi 4+, etc.) |
 
-**Note**: Linux uses `aarch64` instead of `arm64` to match Linux conventions.
+**Note**: brew itself bottles Linux ARM as `arm64_linux`. The older
+`aarch64_linux` spelling is still accepted by Homebrew for backwards
+compatibility (`Utils::Bottles::Tag#to_unstandardized_sym`), and gobottle
+accepts it in platform filters, but it never emits it.
 
 ## Special Tags
 
@@ -62,7 +65,7 @@ func PlatformTag(goos, goarch string) (string, error) {
         case "amd64":
             return "x86_64_linux", nil
         case "arm64":
-            return "aarch64_linux", nil
+            return "arm64_linux", nil
         }
     }
     return "", fmt.Errorf("unsupported platform: %s/%s", goos, goarch)
@@ -120,7 +123,7 @@ support:
 For cross-compiled Go binaries the artifact is identical regardless of macOS
 version, so publishing multiple macOS-version tags per arch is pure waste —
 publish one bottle per arch tagged with the oldest supported version.
-Linux tags (`x86_64_linux`, `aarch64_linux`) match exactly, no fallback
+Linux tags (`x86_64_linux`, `arm64_linux`) match exactly, no fallback
 needed.
 
 ## Default Cellar Paths
@@ -197,7 +200,7 @@ var (
     LinuxARM64 = Platform{
         OS:   "linux",
         Arch: "arm64",
-        Tag:  "aarch64_linux",
+        Tag:  "arm64_linux",
     }
 )
 ```
@@ -218,7 +221,7 @@ var SupportedPlatforms = []Platform{
 
     // Linux
     {OS: "linux", Arch: "amd64", Tag: "x86_64_linux"},
-    {OS: "linux", Arch: "arm64", Tag: "aarch64_linux"},
+    {OS: "linux", Arch: "arm64", Tag: "arm64_linux"},
 }
 ```
 
@@ -244,7 +247,7 @@ func ParsePlatform(s string) (Platform, error) {
         return Platform{OS: "darwin", Arch: "amd64", Tag: s}, nil
     case "x86_64_linux":
         return Platform{OS: "linux", Arch: "amd64", Tag: s}, nil
-    case "aarch64_linux":
+    case "arm64_linux":
         return Platform{OS: "linux", Arch: "arm64", Tag: s}, nil
     }
 
@@ -261,7 +264,7 @@ When publishing to GHCR as OCI images:
 | `arm64_*` | `darwin` | `arm64` |
 | `sonoma`, `sequoia`, etc. | `darwin` | `amd64` |
 | `x86_64_linux` | `linux` | `amd64` |
-| `aarch64_linux` | `linux` | `arm64` |
+| `arm64_linux` | `linux` | `arm64` |
 
 ```go
 func (p Platform) OCIPlatform() v1.Platform {
@@ -317,7 +320,7 @@ jobs:
             tag: x86_64_linux
           - goos: linux
             goarch: arm64
-            tag: aarch64_linux
+            tag: arm64_linux
 ```
 
 ## Version Lifecycle
