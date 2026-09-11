@@ -13,7 +13,7 @@ import (
 
 const (
 	// HomebrewVersionURL is the URL to Homebrew's macOS version definitions
-	HomebrewVersionURL = "https://raw.githubusercontent.com/Homebrew/brew/master/Library/Homebrew/macos_version.rb"
+	HomebrewVersionURL = "https://raw.githubusercontent.com/Homebrew/brew/HEAD/Library/Homebrew/macos_version.rb"
 
 	// MinSupportedMacOSMajor is the minimum macOS version we generate bottles for
 	// Apple supports ~3 years of macOS versions
