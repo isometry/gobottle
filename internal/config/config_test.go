@@ -701,6 +701,23 @@ func TestValidateBinaryLinks(t *testing.T) {
 			expectError: true,
 			errorField:  "binaries[1].links[0]",
 		},
+		{
+			name: "link differs from a binary name only by case",
+			binaries: []BinaryConfig{
+				{Name: "foo", Links: []string{"Foo"}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link duplicates another link only by case",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"kubectl-X"}},
+				{Name: "othertool", Links: []string{"kubectl-x"}},
+			},
+			expectError: true,
+			errorField:  "binaries[1].links[0]",
+		},
 	}
 
 	for _, tt := range tests {

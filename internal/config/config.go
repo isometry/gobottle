@@ -579,9 +579,12 @@ func (c *Config) ValidateFor(needToken bool) error {
 	// seen starts with every binary name, so a link can never collide with
 	// (or shadow) a real binary; it then accumulates link names as they're
 	// validated, so links must also be unique across the whole formula.
+	// Keyed on strings.ToLower: APFS (macOS's default filesystem) is
+	// case-insensitive, so e.g. links "kubectl-X" and "kubectl-x" would
+	// clobber each other when poured even though they compare unequal here.
 	seen := make(map[string]bool, len(c.Binaries))
 	for _, bin := range c.Binaries {
-		seen[bin.Name] = true
+		seen[strings.ToLower(bin.Name)] = true
 	}
 	for i, bin := range c.Binaries {
 		if bin.Name == "" {
@@ -604,14 +607,14 @@ func (c *Config) ValidateFor(needToken bool) error {
 					Value:   link,
 					Message: `link name must not contain '/' or '\', and must not be "." or ".."`,
 				})
-			case seen[link]:
+			case seen[strings.ToLower(link)]:
 				errs = append(errs, &ValidationError{
 					Field:   field,
 					Value:   link,
-					Message: "link name must be unique across the formula and must not equal any binary name",
+					Message: "link name must be unique across the formula (case-insensitive) and must not equal any binary name",
 				})
 			default:
-				seen[link] = true
+				seen[strings.ToLower(link)] = true
 			}
 		}
 	}
