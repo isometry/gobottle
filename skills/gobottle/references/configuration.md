@@ -173,3 +173,8 @@ the built-in template emits them itself, so a template overriding `def
 install` must do the same, using `.Binaries[].Links` and each binary's
 `.Dir` (the same helper the built-in template uses for `bin`, `libexec`,
 and arbitrary keg-relative paths).
+
+A symlink present in the artifact that isn't declared as a binary or a link
+(e.g. an alias a goreleaser archive ships that `links` doesn't list) is never
+bottled — `binaries[].links` is the single source of truth for the bottle's
+layout — and produces a warning instead.

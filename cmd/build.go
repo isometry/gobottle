@@ -134,6 +134,26 @@ func bottleBinaries(cfg *config.Config) []bottle.BinaryInstall {
 	return out
 }
 
+// ignoredSymlinkWarnings returns one warning message per symlink in
+// b.IgnoredSymlinks not already present in warned (keyed "name -> target"),
+// marking each as warned as it goes. The same archive symlinks recur across
+// every artifact and platform in a run, so this keeps each distinct symlink
+// warning exactly once.
+func ignoredSymlinkWarnings(b *bottle.Bottle, warned map[string]bool) []string {
+	var msgs []string
+	for _, s := range b.IgnoredSymlinks {
+		key := s.Name + " -> " + s.Target
+		if warned[key] {
+			continue
+		}
+		warned[key] = true
+		msgs = append(msgs, fmt.Sprintf(
+			"artifact contains symlink %s -> %s, which is not declared in binaries[].links and will not be bottled",
+			s.Name, s.Target))
+	}
+	return msgs
+}
+
 // findHostArtifact returns the artifact runnable on this machine, or nil.
 // On Apple Silicon a darwin/amd64 artifact is an acceptable Rosetta fallback
 // when no exact match exists.
@@ -297,6 +317,10 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 		}
 	}
 
+	// Dedup across the whole run: the same archive symlinks recur in every
+	// artifact and platform, so each distinct one should only warn once.
+	warned := map[string]bool{}
+
 	for _, art := range artifacts {
 		platforms := platformInfo.GetPlatformsForOS(art.OS, art.Arch)
 		platforms = platform.FilterPlatforms(platforms, cfg.Bottle.Platforms, cfg.Bottle.ExcludePlatforms)
@@ -335,6 +359,9 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 				return nil, fmt.Errorf("failed to build bottle for %s: %w", plat.Tag, err)
 			}
 			progress("  built %s (%s)", b.BottleName(), b.SHA256[:12])
+			for _, msg := range ignoredSymlinkWarnings(b, warned) {
+				warn("%s", msg)
+			}
 
 			entry, err := manifestEntry(b)
 			if err != nil {

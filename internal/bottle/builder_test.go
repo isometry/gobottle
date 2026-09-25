@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -636,6 +637,67 @@ func TestBuildArtifactAlreadyContainsLink(t *testing.T) {
 				t.Errorf("bin/kubectl-mytool linkname = %q, want %q", hdr.Linkname, "mytool")
 			}
 		})
+	}
+}
+
+// TestBuildIgnoredSymlinks covers artifact symlinks Build does not bottle: an
+// alias a goreleaser archive ships without a matching binaries[].links entry
+// is recorded on Bottle.IgnoredSymlinks, a declared link is not, and neither
+// is a plain regular file.
+func TestBuildIgnoredSymlinks(t *testing.T) {
+	artifact := makeArtifactEntries(t, []artifactEntry{
+		{Name: "mytool", Value: "#!/bin/sh\necho mytool\n"},
+		{Name: "kubectl-mytool", Value: "-> mytool"},
+		{Name: "kubectl_complete-mytool", Value: "-> mytool"},
+		{Name: "LICENSE", Value: "MIT\n"},
+	})
+	opts := testBuildOptions(artifact)
+	opts.Binaries = []BinaryInstall{{Name: "mytool", Links: []string{"kubectl-mytool"}}}
+
+	b := buildOnce(t, opts)
+
+	want := []IgnoredSymlink{{Name: "kubectl_complete-mytool", Target: "mytool"}}
+	if !reflect.DeepEqual(b.IgnoredSymlinks, want) {
+		t.Errorf("IgnoredSymlinks = %+v, want %+v", b.IgnoredSymlinks, want)
+	}
+}
+
+// TestBuildIgnoredSymlinksBinaryItselfSymlink covers a configured binary that
+// is itself a symlink inside the artifact (e.g. mytool -> real/mytool): it is
+// resolved and bottled as usual, and must not also surface as an ignored
+// symlink just because its artifact-root entry is one.
+func TestBuildIgnoredSymlinksBinaryItselfSymlink(t *testing.T) {
+	artifact := makeArtifactEntries(t, []artifactEntry{
+		{Name: "real/mytool", Value: "#!/bin/sh\necho real\n"},
+		{Name: "mytool", Value: "-> real/mytool"},
+	})
+	opts := testBuildOptions(artifact)
+
+	b := buildOnce(t, opts)
+
+	if len(b.IgnoredSymlinks) != 0 {
+		t.Errorf("IgnoredSymlinks = %+v, want none", b.IgnoredSymlinks)
+	}
+}
+
+// TestBuildIgnoredSymlinksDirectoryArtifact covers the extractDir ==
+// ArtifactPath path: raw-binary sources staged as a directory rather than an
+// archive.
+func TestBuildIgnoredSymlinksDirectoryArtifact(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mytool"), []byte("#!/bin/sh\necho mytool\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("mytool", filepath.Join(dir, "kubectl-mytool")); err != nil {
+		t.Fatal(err)
+	}
+	opts := testBuildOptions(dir)
+
+	b := buildOnce(t, opts)
+
+	want := []IgnoredSymlink{{Name: "kubectl-mytool", Target: "mytool"}}
+	if !reflect.DeepEqual(b.IgnoredSymlinks, want) {
+		t.Errorf("IgnoredSymlinks = %+v, want %+v", b.IgnoredSymlinks, want)
 	}
 }
 

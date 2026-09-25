@@ -3,9 +3,11 @@ package bottle
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -93,7 +95,11 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	files := make(map[string]string)
 	links := make(map[string]string)
 
+	// declared collects every name Build itself accounts for at the artifact
+	// root (binaries and their links), so the ignored-symlink scan below
+	// knows what *not* to report.
 	binaryNames := make([]string, 0, len(opts.Binaries))
+	declared := make(map[string]bool, len(opts.Binaries))
 	for _, binary := range opts.Binaries {
 		resolved, err := ResolveBinary(extractDir, binary.Name)
 		if err != nil {
@@ -106,10 +112,21 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		}
 		files[path.Join(keg, installPath, binary.Name)] = resolved
 		binaryNames = append(binaryNames, binary.Name)
+		declared[binary.Name] = true
 
 		for _, l := range binary.Links {
 			links[path.Join(keg, installPath, l)] = binary.Name
+			declared[l] = true
 		}
+	}
+
+	// Symlinks the artifact ships at its root but that binaries[].links
+	// doesn't declare (e.g. a goreleaser alias like kubectl-foo -> mytool)
+	// are never bottled: the config is the single source of truth for the
+	// bottle's layout. They're surfaced here so the caller can warn instead.
+	ignoredSymlinks, err := findIgnoredSymlinks(extractDir, declared)
+	if err != nil {
+		return nil, err
 	}
 
 	for archivePath, localPath := range opts.ExtraFiles {
@@ -179,7 +196,32 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		Cellar:             opts.Cellar,
 		Rebuild:            opts.Rebuild,
 		Tab:                tab,
+		IgnoredSymlinks:    ignoredSymlinks,
 	}, nil
+}
+
+// findIgnoredSymlinks scans the top level of dir (not recursively: binaries
+// are only ever looked up at the root) for symlink entries whose name isn't
+// in declared, returning them sorted by name.
+func findIgnoredSymlinks(dir string, declared map[string]bool) ([]IgnoredSymlink, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read artifact directory: %w", err)
+	}
+
+	var ignored []IgnoredSymlink
+	for _, entry := range entries {
+		if entry.Type()&fs.ModeSymlink == 0 || declared[entry.Name()] {
+			continue
+		}
+		target, err := os.Readlink(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read symlink %s: %w", entry.Name(), err)
+		}
+		ignored = append(ignored, IgnoredSymlink{Name: entry.Name(), Target: target})
+	}
+	sort.Slice(ignored, func(i, j int) bool { return ignored[i].Name < ignored[j].Name })
+	return ignored, nil
 }
 
 // ResolveBinary resolves name within dir (an extracted artifact directory,
