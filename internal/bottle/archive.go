@@ -97,6 +97,12 @@ func writeTarGz(outputPath string, files map[string]string, mtime time.Time) (*a
 		hdr.Uname = ""
 		hdr.Gname = ""
 		hdr.Format = tar.FormatPAX
+		if hdr.Typeflag == tar.TypeSymlink {
+			// Host-independent: an Lstat-derived symlink mode otherwise
+			// varies by platform, which would make bottle digests depend
+			// on the build host.
+			hdr.Mode = 0777
+		}
 
 		if err := tw.WriteHeader(hdr); err != nil {
 			return nil, fmt.Errorf("failed to write tar header %s: %w", name, err)

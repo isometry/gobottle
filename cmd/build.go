@@ -180,7 +180,14 @@ func generateCompletions(ctx context.Context, cfg *config.Config, source artifac
 		if b.InstallPath != "bin" {
 			continue
 		}
-		entries, err := bottle.GenerateCompletions(ctx, filepath.Join(extractDir, b.Name), cfg.Formula.Install.CompletionsCommand, workDir)
+		// Resolve through any symlink (as Build does) rather than joining
+		// extractDir and running the result directly: a symlinked binary
+		// could otherwise make this run a host binary outside the artifact.
+		resolved, err := bottle.ResolveBinary(extractDir, b.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve binary %s for completions: %w", b.Name, err)
+		}
+		entries, err := bottle.GenerateCompletions(ctx, resolved, cfg.Formula.Install.CompletionsCommand, workDir)
 		if err != nil {
 			return nil, err
 		}
