@@ -25,6 +25,7 @@ type Builder struct {
 type BinaryInstall struct {
 	Name        string
 	InstallPath string
+	Links       []string // symlinked alias names, installed alongside Name
 }
 
 // BuildOptions contains the parameters for building a bottle
@@ -86,8 +87,11 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	}
 
 	// Map of archive path -> local path, all rooted at <formula>/<version>/.
+	// links is a separate archive path -> linkname map: each entry becomes a
+	// relative symlink in the bottle tarball rather than a copied file.
 	keg := path.Join(opts.Formula, opts.Version)
 	files := make(map[string]string)
+	links := make(map[string]string)
 
 	binaryNames := make([]string, 0, len(opts.Binaries))
 	for _, binary := range opts.Binaries {
@@ -102,6 +106,10 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		}
 		files[path.Join(keg, installPath, binary.Name)] = resolved
 		binaryNames = append(binaryNames, binary.Name)
+
+		for _, l := range binary.Links {
+			links[path.Join(keg, installPath, l)] = binary.Name
+		}
 	}
 
 	for archivePath, localPath := range opts.ExtraFiles {
@@ -154,7 +162,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	bottleName := bottleFilename(opts.Formula, opts.Version, opts.Platform.Tag, opts.Rebuild)
 	bottlePath := filepath.Join(outDir, bottleName)
 
-	res, err := writeTarGz(bottlePath, files, sourceDate)
+	res, err := writeTarGz(bottlePath, files, links, sourceDate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bottle tarball: %w", err)
 	}

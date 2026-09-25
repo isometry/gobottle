@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -23,7 +24,7 @@ func TestWriteTarGzPinsSymlinkMode(t *testing.T) {
 	files := map[string]string{
 		"mytool/1.2.3/bin/kubectl-mytool": filepath.Join(dir, "kubectl-mytool"),
 	}
-	if _, err := writeTarGz(outputPath, files, time.Unix(1700000000, 0)); err != nil {
+	if _, err := writeTarGz(outputPath, files, nil, time.Unix(1700000000, 0)); err != nil {
 		t.Fatalf("writeTarGz: %v", err)
 	}
 
@@ -56,5 +57,30 @@ func TestWriteTarGzPinsSymlinkMode(t *testing.T) {
 	}
 	if hdr.Mode != 0777 {
 		t.Errorf("mode = %o, want 0777", hdr.Mode)
+	}
+}
+
+// TestWriteTarGzRejectsPathInBothMaps ensures a path configured as both a
+// file and a link is caught explicitly, rather than silently picking one.
+func TestWriteTarGzRejectsPathInBothMaps(t *testing.T) {
+	dir := t.TempDir()
+	binPath := filepath.Join(dir, "mytool")
+	if err := os.WriteFile(binPath, []byte("x"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	outputPath := filepath.Join(dir, "out.tar.gz")
+	files := map[string]string{
+		"mytool/1.2.3/bin/kubectl-mytool": binPath,
+	}
+	links := map[string]string{
+		"mytool/1.2.3/bin/kubectl-mytool": "mytool",
+	}
+	_, err := writeTarGz(outputPath, files, links, time.Unix(1700000000, 0))
+	if err == nil {
+		t.Fatal("writeTarGz: expected error for a path in both maps")
+	}
+	if !strings.Contains(err.Error(), "mytool/1.2.3/bin/kubectl-mytool") {
+		t.Errorf("writeTarGz error = %v, want mention of the colliding path", err)
 	}
 }

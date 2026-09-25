@@ -5,7 +5,8 @@ git-derived defaults > built-in defaults. Env vars map dots to
 underscores: `formula.install.completions` → `GOBOTTLE_FORMULA_INSTALL_COMPLETIONS`.
 
 Shorthands: `formula: mytool` ≡ `formula: {name: mytool}`;
-`binaries: [a, b]` ≡ `binaries: [{name: a}, {name: b}]`.
+`binaries: [a, b]` ≡ `binaries: [{name: a}, {name: b}]` (the shorthand form
+cannot carry `links`; use the long form for a binary that needs any).
 
 ## formula — the generated formula (gobottle owns it outright)
 
@@ -138,7 +139,37 @@ HEAD (falls back to the latest reachable tag). Flag: `--version`.
 
 ## binaries
 
-List of `{name, install_path}`; default: one binary named after the
+List of `{name, install_path, links}`; default: one binary named after the
 formula, installed to `bin`. `install_path: libexec` (or any keg-relative
 path) renders the matching install line; only `bin`-installed binaries
 drive the default test and completions.
+
+`links` names extra symlinked aliases for the binary, installed alongside it
+in the same `install_path` — the way kubectl plugins are distributed, for
+example:
+
+```yaml
+binaries:
+  - name: milestonectl
+    links: [kubectl-milestone, kubectl_complete-milestone]
+```
+
+This bottles `bin/milestonectl` plus two relative symlinks pointing at it
+(`bin/kubectl-milestone -> milestonectl`,
+`bin/kubectl_complete-milestone -> milestonectl`), and the generated formula
+gets matching `bin.install_symlink "milestonectl" => "kubectl-milestone"`
+lines so `--build-from-source` and `--HEAD` installs end up with the same
+keg layout as a poured bottle. Each link must be non-empty, contain no `/`
+or `\`, and not be `.` or `..`; it must also be unique across the whole
+formula and different from every configured binary name. Links are not
+binaries: they never pair with `packages`, run completions, or drive the
+default test.
+
+The `--binaries` flag (which replaces the whole `binaries` list) is a flat
+name list and cannot carry links; configure them in `.gobottle.yaml`.
+
+A custom `formula.template` does not get `install_symlink` lines for free:
+the built-in template emits them itself, so a template overriding `def
+install` must do the same, using `.Binaries[].Links` and each binary's
+`.Dir` (the same helper the built-in template uses for `bin`, `libexec`,
+and arbitrary keg-relative paths).

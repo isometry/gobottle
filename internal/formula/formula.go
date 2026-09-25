@@ -41,6 +41,23 @@ type Formula struct {
 type BinaryInstall struct {
 	Name        string
 	InstallPath string
+	Links       []string // symlinked alias names, installed alongside Name
+}
+
+// Dir renders the Ruby Pathname expression for the directory Name installs
+// into: the bin and libexec accessors for those two well-known paths, or an
+// arbitrary keg-relative path wrapped as (prefix/"...") otherwise. Used for
+// both the install and install_symlink lines, so a custom template can reuse
+// it too.
+func (b BinaryInstall) Dir() string {
+	switch b.InstallPath {
+	case "bin":
+		return "bin"
+	case "libexec":
+		return "libexec"
+	default:
+		return "(prefix/" + quoteRuby(b.InstallPath) + ")"
+	}
 }
 
 // BinBinaries returns the names of the binaries installed into bin; only

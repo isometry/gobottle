@@ -114,6 +114,7 @@ func buildOnce(t *testing.T, opts BuildOptions) *Bottle {
 func TestBuildDeterministic(t *testing.T) {
 	artifact := makeArtifact(t, "mytool")
 	opts := testBuildOptions(artifact)
+	opts.Binaries = []BinaryInstall{{Name: "mytool", InstallPath: "bin", Links: []string{"kubectl-mytool"}}}
 
 	b1 := buildOnce(t, opts)
 	b2 := buildOnce(t, opts)
@@ -126,6 +127,107 @@ func TestBuildDeterministic(t *testing.T) {
 	}
 	if b1.UncompressedSize == 0 {
 		t.Error("uncompressed size not recorded")
+	}
+}
+
+// TestBuildBinaryLinks covers the symlink entries a configured link produces:
+// the default bin install path and a custom install_path, correct Linkname,
+// host-independent mode, and that the entry's parent directory exists too.
+func TestBuildBinaryLinks(t *testing.T) {
+	tests := []struct {
+		name        string
+		installPath string
+		wantPath    string
+		wantDir     string
+	}{
+		{
+			name:        "default bin install path",
+			installPath: "",
+			wantPath:    "mytool/1.2.3/bin/kubectl-mytool",
+			wantDir:     "mytool/1.2.3/bin/",
+		},
+		{
+			name:        "custom install path",
+			installPath: "libexec",
+			wantPath:    "mytool/1.2.3/libexec/kubectl-mytool",
+			wantDir:     "mytool/1.2.3/libexec/",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			artifact := makeArtifact(t, "mytool")
+			opts := testBuildOptions(artifact)
+			opts.Binaries = []BinaryInstall{
+				{Name: "mytool", InstallPath: tt.installPath, Links: []string{"kubectl-mytool"}},
+			}
+
+			b := buildOnce(t, opts)
+			headers := readTarHeaders(t, b.Path)
+
+			hdr, ok := headers[tt.wantPath]
+			if !ok {
+				t.Fatalf("bottle missing link entry %s (have %v)", tt.wantPath, headerNames(headers))
+			}
+			if hdr.Typeflag != tar.TypeSymlink {
+				t.Errorf("typeflag = %v, want TypeSymlink", hdr.Typeflag)
+			}
+			if hdr.Linkname != "mytool" {
+				t.Errorf("linkname = %q, want %q", hdr.Linkname, "mytool")
+			}
+			if hdr.Mode != 0777 {
+				t.Errorf("mode = %o, want 0777", hdr.Mode)
+			}
+			if _, ok := headers[tt.wantDir]; !ok {
+				t.Errorf("bottle missing parent dir entry %s (have %v)", tt.wantDir, headerNames(headers))
+			}
+		})
+	}
+}
+
+// TestBuildBinaryLinksAcrossPlatforms builds the same directory artifact
+// twice, for two different platforms, with links configured. Both builds
+// reuse the artifact directory as extractDir, so this exercises the same
+// on-disk-symlink-avoidance path TestBuildIsolation covers for plain
+// binaries: the tar writer must not attempt os.Symlink on the shared
+// artifact.
+func TestBuildBinaryLinksAcrossPlatforms(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mytool"), []byte("#!/bin/sh\necho mytool\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	builder, err := NewBuilder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = builder.Close() })
+
+	optsA := testBuildOptions(dir)
+	optsA.Binaries = []BinaryInstall{{Name: "mytool", Links: []string{"kubectl-mytool"}}}
+
+	optsB := testBuildOptions(dir)
+	optsB.Binaries = []BinaryInstall{{Name: "mytool", Links: []string{"kubectl-mytool"}}}
+	optsB.Platform = platform.Platform{Tag: "x86_64_linux", OS: "linux", Arch: "amd64"}
+
+	bA, err := builder.Build(context.Background(), optsA)
+	if err != nil {
+		t.Fatalf("Build() for platform A: %v", err)
+	}
+	bB, err := builder.Build(context.Background(), optsB)
+	if err != nil {
+		t.Fatalf("Build() for platform B: %v", err)
+	}
+
+	for _, b := range []*Bottle{bA, bB} {
+		headers := readTarHeaders(t, b.Path)
+		hdr, ok := headers["mytool/1.2.3/bin/kubectl-mytool"]
+		if !ok {
+			t.Fatalf("bottle %s missing link entry (have %v)", b.Path, headerNames(headers))
+		}
+		if hdr.Typeflag != tar.TypeSymlink {
+			t.Errorf("bottle %s: typeflag = %v, want TypeSymlink", b.Path, hdr.Typeflag)
+		}
 	}
 }
 
@@ -482,6 +584,56 @@ func TestBuildArtifactSymlinks(t *testing.T) {
 				if got := entries["mytool/1.2.3/bin/mytool"]; got != tt.wantContent {
 					t.Errorf("bin/mytool content = %q, want %q", got, tt.wantContent)
 				}
+			}
+		})
+	}
+}
+
+// TestBuildArtifactAlreadyContainsLink covers a configured link whose name
+// the release archive already occupies, either as a symlink (a goreleaser
+// archives.files alias) or as a full duplicated regular-file copy: either
+// way, gobottle's own generated symlink must win and the archive's copy must
+// never surface under that name — exactly one bin/kubectl-mytool entry,
+// which is the symlink.
+func TestBuildArtifactAlreadyContainsLink(t *testing.T) {
+	tests := []struct {
+		name    string
+		entries []artifactEntry
+	}{
+		{
+			name: "archive ships a symlink under the link name",
+			entries: []artifactEntry{
+				{Name: "mytool", Value: "#!/bin/sh\necho mytool\n"},
+				{Name: "kubectl-mytool", Value: "-> mytool"},
+			},
+		},
+		{
+			name: "archive ships a full regular-file copy under the link name",
+			entries: []artifactEntry{
+				{Name: "mytool", Value: "#!/bin/sh\necho mytool\n"},
+				{Name: "kubectl-mytool", Value: "#!/bin/sh\necho mytool\n"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			artifact := makeArtifactEntries(t, tt.entries)
+			opts := testBuildOptions(artifact)
+			opts.Binaries = []BinaryInstall{{Name: "mytool", Links: []string{"kubectl-mytool"}}}
+
+			b := buildOnce(t, opts)
+			headers := readTarHeaders(t, b.Path)
+
+			hdr, ok := headers["mytool/1.2.3/bin/kubectl-mytool"]
+			if !ok {
+				t.Fatalf("bottle missing bin/kubectl-mytool (have %v)", headerNames(headers))
+			}
+			if hdr.Typeflag != tar.TypeSymlink {
+				t.Errorf("bin/kubectl-mytool typeflag = %v, want TypeSymlink (gobottle's own link)", hdr.Typeflag)
+			}
+			if hdr.Linkname != "mytool" {
+				t.Errorf("bin/kubectl-mytool linkname = %q, want %q", hdr.Linkname, "mytool")
 			}
 		})
 	}

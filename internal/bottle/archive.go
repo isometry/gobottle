@@ -27,7 +27,11 @@ type archiveResult struct {
 // inputs always produce byte-identical output, so bottle SHA256s are stable
 // across runs — the property brew's blob-addressed pours and idempotent
 // re-pushes depend on.
-func writeTarGz(outputPath string, files map[string]string, mtime time.Time) (*archiveResult, error) {
+//
+// files maps archive path -> local path, copied in as regular files. links
+// maps archive path -> link target, emitted as relative symlinks; it is an
+// error for a path to appear in both maps.
+func writeTarGz(outputPath string, files, links map[string]string, mtime time.Time) (*archiveResult, error) {
 	outFile, err := os.Create(outputPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create output file: %w", err)
@@ -42,14 +46,23 @@ func writeTarGz(outputPath string, files map[string]string, mtime time.Time) (*a
 
 	mtime = mtime.UTC().Truncate(time.Second)
 
-	// Collect implicit parent directories.
+	// Collect implicit parent directories, from both maps' paths.
 	dirs := map[string]bool{}
-	names := make([]string, 0, len(files))
-	for name := range files {
+	names := make([]string, 0, len(files)+len(links))
+	addName := func(name string) {
 		names = append(names, name)
 		for dir := path.Dir(name); dir != "." && dir != "/"; dir = path.Dir(dir) {
 			dirs[dir] = true
 		}
+	}
+	for name := range files {
+		if _, ok := links[name]; ok {
+			return nil, fmt.Errorf("path %s is both a file and a link", name)
+		}
+		addName(name)
+	}
+	for name := range links {
+		addName(name)
 	}
 	for dir := range dirs {
 		names = append(names, dir+"/")
@@ -67,6 +80,21 @@ func writeTarGz(outputPath string, files map[string]string, mtime time.Time) (*a
 			}
 			if err := tw.WriteHeader(hdr); err != nil {
 				return nil, fmt.Errorf("failed to write dir header %s: %w", name, err)
+			}
+			continue
+		}
+
+		if linkname, ok := links[name]; ok {
+			hdr := &tar.Header{
+				Typeflag: tar.TypeSymlink,
+				Name:     name,
+				Linkname: linkname,
+				Mode:     0777,
+				ModTime:  mtime,
+				Format:   tar.FormatPAX,
+			}
+			if err := tw.WriteHeader(hdr); err != nil {
+				return nil, fmt.Errorf("failed to write link header %s: %w", name, err)
 			}
 			continue
 		}

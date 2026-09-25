@@ -84,7 +84,7 @@ func resolveSourceDate() time.Time {
 func formulaBinaries(cfg *config.Config) []formula.BinaryInstall {
 	out := make([]formula.BinaryInstall, len(cfg.Binaries))
 	for i, b := range cfg.Binaries {
-		out[i] = formula.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath}
+		out[i] = formula.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath, Links: b.Links}
 	}
 	return out
 }

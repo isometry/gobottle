@@ -129,7 +129,7 @@ is the input to 'gobottle push' and 'gobottle release'.`,
 func bottleBinaries(cfg *config.Config) []bottle.BinaryInstall {
 	out := make([]bottle.BinaryInstall, len(cfg.Binaries))
 	for i, b := range cfg.Binaries {
-		out[i] = bottle.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath}
+		out[i] = bottle.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath, Links: b.Links}
 	}
 	return out
 }

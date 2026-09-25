@@ -124,6 +124,36 @@ func TestLoadFormulaStringShorthand(t *testing.T) {
 	}
 }
 
+func TestLoadBinaryLinks(t *testing.T) {
+	cfg := loadFromYAML(t, `
+formula:
+  name: mytool
+binaries:
+  - milestonectl
+  - name: milestonectl
+    links: [kubectl-milestone, kubectl_complete-milestone]
+`)
+
+	// The string shorthand and the long form are mixed in the same list;
+	// only the long-form entry carries links.
+	if len(cfg.Binaries) != 2 {
+		t.Fatalf("binaries = %+v", cfg.Binaries)
+	}
+	if got := cfg.Binaries[0].Links; got != nil {
+		t.Errorf("shorthand binary links = %v, want nil", got)
+	}
+	want := []string{"kubectl-milestone", "kubectl_complete-milestone"}
+	got := cfg.Binaries[1].Links
+	if len(got) != len(want) {
+		t.Fatalf("links = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("links[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
 func TestLoadHeadTriState(t *testing.T) {
 	tests := []struct {
 		name string

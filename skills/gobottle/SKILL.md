@@ -138,6 +138,13 @@ release's checksum manifest.
   branch, resolved via the API — taps still on `master` just work.
 - **Multi-binary**: `binaries: [{name: mytool}, {name: helper,
   install_path: libexec}]` stages and renders install lines per path.
+- **Symlinked aliases**: `binaries[].links` bottles extra symlinked names
+  for a binary (e.g. a kubectl plugin: `links: [kubectl-mytool]` ships
+  `bin/kubectl-mytool -> mytool` and a matching `install_symlink` line in
+  the formula), without a second full copy. Validated for uniqueness and
+  safe file names; the `--binaries` flag can't carry them, and a custom
+  `formula.template` must emit its own `install_symlink` lines (see
+  [references/configuration.md](references/configuration.md#binaries)).
 - **GHCR visibility**: after the first release, make the package public
   (Package settings → Change visibility) or brew cannot pour anonymously.
 - **Tap trust (Homebrew ≥6)**: installs from third-party taps fail until
