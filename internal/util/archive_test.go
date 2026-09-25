@@ -272,3 +272,32 @@ func TestExtractTarRejectsChainedSymlinkEscape(t *testing.T) {
 		t.Errorf("chained symlink escaped destDir: %s was created", escaped)
 	}
 }
+
+// TestExtractTarAbsoluteMemberName covers an archive built with `tar -P`,
+// whose member names carry a leading "/" (e.g. "/mytool" rather than
+// "mytool"). That leading slash used to survive into relName and get handed
+// to os.Root, which rejects absolute paths outright; extractTar must strip
+// it and extract under destDir like any other member.
+func TestExtractTarAbsoluteMemberName(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("hello from absolute member\n")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "/mytool", Mode: 0755, Size: int64(len(content)),
+		ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := extractTar(&buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+	assertExtracted(t, dest, "mytool", string(content))
+}

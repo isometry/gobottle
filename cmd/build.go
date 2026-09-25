@@ -187,7 +187,7 @@ func generateCompletions(ctx context.Context, cfg *config.Config, source artifac
 		if err != nil {
 			return nil, fmt.Errorf("failed to resolve binary %s for completions: %w", b.Name, err)
 		}
-		entries, err := bottle.GenerateCompletions(ctx, resolved, cfg.Formula.Install.CompletionsCommand, workDir)
+		entries, err := bottle.GenerateCompletions(ctx, resolved, b.Name, cfg.Formula.Install.CompletionsCommand, workDir)
 		if err != nil {
 			return nil, err
 		}

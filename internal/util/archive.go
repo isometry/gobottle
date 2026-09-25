@@ -99,7 +99,15 @@ func extractTar(r io.Reader, destDir string) error {
 		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid file path: %s", header.Name)
 		}
-		relName := filepath.Clean(header.Name)
+		// Derive relName from the already-validated target rather than from
+		// header.Name directly: a member name with a leading "/" (e.g. from
+		// `tar -P`) stays absolute through filepath.Clean, and os.Root
+		// rejects an absolute path outright even though target above
+		// resolves safely under destDir.
+		relName, err := filepath.Rel(filepath.Clean(destDir), filepath.Clean(target))
+		if err != nil {
+			return fmt.Errorf("invalid file path: %s", header.Name)
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
