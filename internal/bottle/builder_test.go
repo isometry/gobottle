@@ -503,8 +503,8 @@ func headerNames(m map[string]*tar.Header) []string {
 // alongside the configured binaries: an alias link that isn't itself
 // configured must be dropped, and a configured binary that is a symlink
 // must be resolved to a regular file. Dangling and escaping targets must
-// fail the build (the escaping case is actually caught by extractTar during
-// extraction, before Build ever sees it).
+// fail the build (extraction creates such links as-is; ResolveBinary rejects
+// them when a configured binary uses one).
 func TestBuildArtifactSymlinks(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -587,6 +587,31 @@ func TestBuildArtifactSymlinks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildArtifactEscapingSymlinkConfiguredBinary covers a configured binary
+// that is an absolute symlink to a file that exists outside the artifact:
+// extraction keeps the link, and ResolveBinary must refuse it at use time.
+func TestBuildArtifactEscapingSymlinkConfiguredBinary(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("secret\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	artifact := makeArtifactEntries(t, []artifactEntry{{Name: "mytool", Value: "-> " + outside}})
+
+	builder, err := NewBuilder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = builder.Close() })
+
+	_, err = builder.Build(context.Background(), testBuildOptions(artifact))
+	if err == nil {
+		t.Fatal("Build() succeeded, want error for binary symlink escaping the artifact")
+	}
+	if !strings.Contains(err.Error(), "resolves outside the artifact") {
+		t.Errorf("Build() error = %v, want containing %q", err, "resolves outside the artifact")
 	}
 }
 

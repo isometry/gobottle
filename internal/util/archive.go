@@ -58,18 +58,39 @@ func ExtractTarBz2(archivePath, destDir string) error {
 	return extractTar(bzip2.NewReader(f), destDir)
 }
 
+// entryRelPath normalises an archive member name to a path relative to the
+// extraction root, suitable for os.Root. A leading "/" (from `tar -P`) is
+// stripped, and "." is returned for a root entry such as "./". Names that
+// would climb out of the root are rejected.
+func entryRelPath(name string) (string, error) {
+	rel := filepath.Clean(strings.TrimLeft(filepath.FromSlash(name), string(os.PathSeparator)))
+	if rel != "." && !filepath.IsLocal(rel) {
+		return "", fmt.Errorf("invalid file path: %s", name)
+	}
+	return rel, nil
+}
+
+// writeSymlink creates a symlink at rel, creating parent directories as
+// needed. The target is stored verbatim and not validated.
+func writeSymlink(root *os.Root, rel, linkname string) error {
+	if err := root.MkdirAll(filepath.Dir(rel), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+	if err := root.Symlink(linkname, rel); err != nil {
+		return fmt.Errorf("failed to create symlink: %w", err)
+	}
+	return nil
+}
+
 // extractTar walks a tar stream, writing entries under destDir.
 //
 // Every write goes through os.Root, which confines all filesystem access to
 // destDir at the OS level as each path component (including symlinks) is
-// actually resolved. That is the real defence: a lexical check on header
-// text can be fooled by a chain of symlinks whose individual hops each look
-// safe in isolation but whose combined resolution escapes destDir (e.g. a
-// link "s" that lands back inside destDir, followed by a link "u" whose
-// remaining ".." components are then counted from s's real target rather
-// than from u's own directory). The header.Name and Linkname lexical checks
-// below stay because they give an early, specific error for the common
-// cases; os.Root is what actually prevents escape.
+// actually resolved. That covers writes that pass through a link created
+// earlier in the archive, however the chain of links is arranged. Symlinks
+// are created as-is: os.Root does not constrain where a link points, only
+// what we write through it, so consumers must resolve links with their own
+// containment check (as bottle.ResolveBinary does) before trusting them.
 func extractTar(r io.Reader, destDir string) error {
 	// os.Root requires destDir to already exist.
 	if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -92,20 +113,15 @@ func extractTar(r io.Reader, destDir string) error {
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		// Construct target path
-		target := filepath.Join(destDir, header.Name)
-
-		// Ensure target is within destDir (security check)
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
-			return fmt.Errorf("invalid file path: %s", header.Name)
-		}
-		// Derive relName from the already-validated target rather than from
-		// header.Name directly: a member name with a leading "/" (e.g. from
-		// `tar -P`) stays absolute through filepath.Clean, and os.Root
-		// rejects an absolute path outright even though target above
-		// resolves safely under destDir.
-		relName, err := filepath.Rel(filepath.Clean(destDir), filepath.Clean(target))
+		relName, err := entryRelPath(header.Name)
 		if err != nil {
+			return err
+		}
+		// A root entry such as "./" is just destDir, which already exists.
+		if relName == "." {
+			if header.Typeflag == tar.TypeDir {
+				continue
+			}
 			return fmt.Errorf("invalid file path: %s", header.Name)
 		}
 
@@ -121,8 +137,9 @@ func extractTar(r io.Reader, destDir string) error {
 				return fmt.Errorf("failed to create parent directory: %w", err)
 			}
 
-			// Create file
-			outFile, err := root.OpenFile(relName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
+			// Create file. Perm() drops setuid/setgid/sticky and any type
+			// bits, which os.Root.OpenFile refuses.
+			outFile, err := root.OpenFile(relName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode).Perm())
 			if err != nil {
 				return fmt.Errorf("failed to create file: %w", err)
 			}
@@ -134,23 +151,8 @@ func extractTar(r io.Reader, destDir string) error {
 			outFile.Close()
 
 		case tar.TypeSymlink:
-			// Reject a link target that escapes destDir, whether given as an
-			// absolute path or as a relative path that climbs out via "..".
-			if filepath.IsAbs(header.Linkname) {
-				return fmt.Errorf("invalid file path: %s -> %s", header.Name, header.Linkname)
-			}
-			resolved := filepath.Clean(filepath.Join(filepath.Dir(target), header.Linkname))
-			if !strings.HasPrefix(resolved, filepath.Clean(destDir)+string(os.PathSeparator)) {
-				return fmt.Errorf("invalid file path: %s -> %s", header.Name, header.Linkname)
-			}
-
-			// Create parent directory if needed
-			if err := root.MkdirAll(filepath.Dir(relName), 0755); err != nil {
-				return fmt.Errorf("failed to create parent directory: %w", err)
-			}
-
-			if err := root.Symlink(header.Linkname, relName); err != nil {
-				return fmt.Errorf("failed to create symlink: %w", err)
+			if err := writeSymlink(root, relName, header.Linkname); err != nil {
+				return err
 			}
 		}
 	}
@@ -226,7 +228,9 @@ func addToTar(tw *tar.Writer, archivePath, localPath string) error {
 	return nil
 }
 
-// ExtractZip extracts a .zip archive to a destination directory
+// ExtractZip extracts a .zip archive to a destination directory. Like
+// extractTar, writes are confined to destDir by os.Root and symlink entries
+// are created as-is.
 func ExtractZip(archivePath, destDir string) error {
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -234,48 +238,81 @@ func ExtractZip(archivePath, destDir string) error {
 	}
 	defer r.Close()
 
+	// os.Root requires destDir to already exist.
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("failed to open destination directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
 	for _, f := range r.File {
-		// Construct target path
-		target := filepath.Join(destDir, f.Name)
-
-		// Ensure target is within destDir (security check)
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
-			return fmt.Errorf("invalid file path: %s", f.Name)
-		}
-
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return fmt.Errorf("failed to create directory: %w", err)
-			}
-			continue
-		}
-
-		// Create parent directory if needed
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return fmt.Errorf("failed to create parent directory: %w", err)
-		}
-
-		// Create file
-		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, f.Mode())
+		relName, err := entryRelPath(f.Name)
 		if err != nil {
-			return fmt.Errorf("failed to create file: %w", err)
+			return err
 		}
-
-		rc, err := f.Open()
-		if err != nil {
-			outFile.Close()
-			return fmt.Errorf("failed to open file in archive: %w", err)
+		if err := extractZipEntry(root, f, relName); err != nil {
+			return err
 		}
-
-		if _, err := io.Copy(outFile, rc); err != nil {
-			rc.Close()
-			outFile.Close()
-			return fmt.Errorf("failed to write file: %w", err)
-		}
-
-		rc.Close()
-		outFile.Close()
 	}
 
+	return nil
+}
+
+// maxZipLinkTarget caps how much of a symlink entry's body is read as its
+// target, well above PATH_MAX.
+const maxZipLinkTarget = 4096
+
+// extractZipEntry writes one zip member to relName under root.
+func extractZipEntry(root *os.Root, f *zip.File, relName string) error {
+	mode := f.Mode()
+
+	// A root entry such as "./" is just destDir, which already exists.
+	if relName == "." {
+		if mode.IsDir() {
+			return nil
+		}
+		return fmt.Errorf("invalid file path: %s", f.Name)
+	}
+
+	if mode.IsDir() {
+		if err := root.MkdirAll(relName, 0755); err != nil {
+			return fmt.Errorf("failed to create directory: %w", err)
+		}
+		return nil
+	}
+
+	rc, err := f.Open()
+	if err != nil {
+		return fmt.Errorf("failed to open file in archive: %w", err)
+	}
+	defer rc.Close()
+
+	// A symlink entry's body is its target.
+	if mode&os.ModeSymlink != 0 {
+		linkname, err := io.ReadAll(io.LimitReader(rc, maxZipLinkTarget))
+		if err != nil {
+			return fmt.Errorf("failed to read symlink target: %w", err)
+		}
+		return writeSymlink(root, relName, string(linkname))
+	}
+
+	// Create parent directory if needed
+	if err := root.MkdirAll(filepath.Dir(relName), 0755); err != nil {
+		return fmt.Errorf("failed to create parent directory: %w", err)
+	}
+
+	// Create file
+	outFile, err := root.OpenFile(relName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return fmt.Errorf("failed to create file: %w", err)
+	}
+	defer outFile.Close()
+
+	if _, err := io.Copy(outFile, rc); err != nil {
+		return fmt.Errorf("failed to write file: %w", err)
+	}
 	return nil
 }

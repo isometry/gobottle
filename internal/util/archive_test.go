@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -171,39 +172,50 @@ func TestExtractTarInTreeSymlink(t *testing.T) {
 	}
 }
 
-func TestExtractTarRejectsAbsoluteSymlink(t *testing.T) {
+// TestExtractTarKeepsOutOfTreeSymlinks covers absolute and escaping link
+// targets: extraction creates them as-is (nothing is followed, so nothing is
+// written outside destDir) and leaves it to the consumer to reject a binary
+// that resolves outside the artifact.
+func TestExtractTarKeepsOutOfTreeSymlinks(t *testing.T) {
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "mytool", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd",
-		Mode: 0777, ModTime: time.Unix(1700000000, 0),
-	}); err != nil {
-		t.Fatal(err)
+	links := map[string]string{
+		"abs": "/etc/passwd",
+		"esc": "../../etc/passwd",
+	}
+	for name, target := range links {
+		if err := tw.WriteHeader(&tar.Header{
+			Name: name, Typeflag: tar.TypeSymlink, Linkname: target,
+			Mode: 0777, ModTime: time.Unix(1700000000, 0),
+		}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
 	}
 
-	if err := extractTar(&buf, t.TempDir()); err == nil {
-		t.Fatal("expected rejection of absolute symlink target")
-	}
-}
-
-func TestExtractTarRejectsEscapingSymlink(t *testing.T) {
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	if err := tw.WriteHeader(&tar.Header{
-		Name: "mytool", Typeflag: tar.TypeSymlink, Linkname: "../../etc/passwd",
-		Mode: 0777, ModTime: time.Unix(1700000000, 0),
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
+	dest := t.TempDir()
+	if err := extractTar(&buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
 	}
 
-	if err := extractTar(&buf, t.TempDir()); err == nil {
-		t.Fatal("expected rejection of escaping symlink target")
+	for name, want := range links {
+		got, err := os.Readlink(filepath.Join(dest, name))
+		if err != nil {
+			t.Fatalf("symlink %s not created: %v", name, err)
+		}
+		if got != want {
+			t.Errorf("symlink %s target = %q, want %q", name, got, want)
+		}
+	}
+	// Links are never followed, so only the two links themselves exist.
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != len(links) {
+		t.Errorf("dest has %d entries, want %d", len(entries), len(links))
 	}
 }
 
@@ -300,4 +312,163 @@ func TestExtractTarAbsoluteMemberName(t *testing.T) {
 		t.Fatalf("extractTar: %v", err)
 	}
 	assertExtracted(t, dest, "mytool", string(content))
+}
+
+// TestExtractTarPreservesExecutableWithSpecialBits covers header modes that
+// carry bits outside 0o777 (setuid, or S_IFREG type bits as written by some
+// archivers); os.Root.OpenFile rejects those, so only the permission bits may
+// be passed through.
+func TestExtractTarPreservesExecutableWithSpecialBits(t *testing.T) {
+	for _, mode := range []int64{0o4755, 0o100755} {
+		t.Run(fmt.Sprintf("%#o", mode), func(t *testing.T) {
+			var buf bytes.Buffer
+			tw := tar.NewWriter(&buf)
+			content := []byte("hello\n")
+			if err := tw.WriteHeader(&tar.Header{
+				Name: "mytool", Mode: mode, Size: int64(len(content)),
+				ModTime: time.Unix(1700000000, 0),
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tw.Write(content); err != nil {
+				t.Fatal(err)
+			}
+			if err := tw.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			dest := t.TempDir()
+			if err := extractTar(&buf, dest); err != nil {
+				t.Fatalf("extractTar: %v", err)
+			}
+			assertExtracted(t, dest, "mytool", string(content))
+			info, err := os.Stat(filepath.Join(dest, "mytool"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := info.Mode(); got != 0755 {
+				t.Errorf("mode = %v, want 0755", got)
+			}
+		})
+	}
+}
+
+// TestExtractTarDotRootEntry covers archives made with `tar -czf x.tgz -C dir .`,
+// which begin with a "./" directory entry and prefix every member with "./".
+func TestExtractTarDotRootEntry(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "./", Typeflag: tar.TypeDir, Mode: 0755,
+		ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	content := []byte("hello from dot root\n")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "./mytool", Mode: 0755, Size: int64(len(content)),
+		ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := extractTar(&buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+	assertExtracted(t, dest, "mytool", string(content))
+}
+
+// writeZip writes a zip archive to a temp file from the given entries and
+// returns its path. A non-empty link makes the entry a symlink to that target.
+func writeZip(t *testing.T, entries []zipEntry) string {
+	t.Helper()
+	archive := filepath.Join(t.TempDir(), "test.zip")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	for _, e := range entries {
+		hdr := &zip.FileHeader{Name: e.name, Method: zip.Deflate}
+		switch {
+		case e.link != "":
+			hdr.SetMode(os.ModeSymlink | 0777)
+		case strings.HasSuffix(e.name, "/"):
+			hdr.SetMode(os.ModeDir | 0755)
+		default:
+			hdr.SetMode(0755)
+		}
+		w, err := zw.CreateHeader(hdr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := e.content
+		if e.link != "" {
+			body = e.link
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive
+}
+
+type zipEntry struct{ name, content, link string }
+
+// TestExtractZipSymlink covers a zip entry carrying the symlink mode bit
+// (e.g. from `zip -y`): its body is the link target and it must be recreated
+// as a symlink, not written out as a small text file.
+func TestExtractZipSymlink(t *testing.T) {
+	archive := writeZip(t, []zipEntry{
+		{name: "mytool_1.2.3", content: "hello from zip\n"},
+		{name: "mytool", link: "mytool_1.2.3"},
+	})
+
+	dest := t.TempDir()
+	if err := ExtractZip(archive, dest); err != nil {
+		t.Fatalf("ExtractZip: %v", err)
+	}
+
+	linkPath := filepath.Join(dest, "mytool")
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		t.Fatalf("symlink not created: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("mytool is not a symlink: mode = %v", info.Mode())
+	}
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "mytool_1.2.3" {
+		t.Errorf("symlink target = %q, want %q", target, "mytool_1.2.3")
+	}
+	assertExtracted(t, dest, "mytool", "hello from zip\n")
+}
+
+func TestExtractZipDotRootEntry(t *testing.T) {
+	archive := writeZip(t, []zipEntry{
+		{name: "./"},
+		{name: "./mytool", content: "hello from zip\n"},
+	})
+
+	dest := t.TempDir()
+	if err := ExtractZip(archive, dest); err != nil {
+		t.Fatalf("ExtractZip: %v", err)
+	}
+	assertExtracted(t, dest, "mytool", "hello from zip\n")
 }
