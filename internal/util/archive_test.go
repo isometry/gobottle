@@ -1,12 +1,15 @@
 package util
 
 import (
+	"archive/tar"
 	"archive/zip"
+	"bytes"
 	"encoding/base64"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // bz2Fixture is a tar.bz2 containing one file, "mytool", with the content
@@ -121,4 +124,180 @@ func TestExtractZipRejectsTraversal(t *testing.T) {
 	if err := ExtractZip(archive, t.TempDir()); err == nil {
 		t.Fatal("expected path-traversal rejection")
 	}
+}
+
+func TestExtractTarInTreeSymlink(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("hello from target\n")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "real/mytool", Mode: 0755, Size: int64(len(content)),
+		ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "mytool", Typeflag: tar.TypeSymlink, Linkname: "real/mytool",
+		Mode: 0777, ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := extractTar(&buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+
+	linkPath := filepath.Join(dest, "mytool")
+	info, err := os.Lstat(linkPath)
+	if err != nil {
+		t.Fatalf("symlink not created: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("mytool is not a symlink: mode = %v", info.Mode())
+	}
+	target, err := os.Readlink(linkPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "real/mytool" {
+		t.Errorf("symlink target = %q, want %q", target, "real/mytool")
+	}
+}
+
+func TestExtractTarRejectsAbsoluteSymlink(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "mytool", Typeflag: tar.TypeSymlink, Linkname: "/etc/passwd",
+		Mode: 0777, ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := extractTar(&buf, t.TempDir()); err == nil {
+		t.Fatal("expected rejection of absolute symlink target")
+	}
+}
+
+func TestExtractTarRejectsEscapingSymlink(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "mytool", Typeflag: tar.TypeSymlink, Linkname: "../../etc/passwd",
+		Mode: 0777, ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := extractTar(&buf, t.TempDir()); err == nil {
+		t.Fatal("expected rejection of escaping symlink target")
+	}
+}
+
+// TestExtractTarRejectsChainedSymlinkEscape covers a chain of symlinks that
+// each look safe under a purely lexical check but whose combined resolution
+// escapes destDir:
+//
+//   - p/q/s -> ../../z (z is a directory entry at the root; this lands back
+//     inside destDir when checked lexically: destDir/p/q/../../z = destDir/z)
+//   - u -> p/q/s/../../x (lexically destDir/p/x, since a naive check treats
+//     "s" as literal text rather than a symlink to elsewhere; but once "s"
+//     is actually followed to destDir/z, the remaining ".." components are
+//     counted from there and land one level above destDir)
+//   - a second entry also named "u", this time a regular file, overwriting
+//     the symlink
+//
+// The last entry is what makes this a genuine proof of escape rather than
+// an incidental collision: os.Mkdir/os.Symlink never follow a symlink at
+// the final path component, so a nested write such as "u/evil" happens to
+// fail safely (EEXIST on "u" itself) even without any escape awareness.
+// os.OpenFile does follow it, though, so writing directly to the path "u"
+// resolves through the whole chain and - under a lexical-check-only
+// implementation - creates and writes the file one directory above destDir,
+// no error returned. extractTar must reject this, and nothing may be
+// created outside destDir.
+func TestExtractTarRejectsChainedSymlinkEscape(t *testing.T) {
+	dest := t.TempDir()
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	write := func(hdr *tar.Header) {
+		t.Helper()
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(&tar.Header{Name: "z", Typeflag: tar.TypeDir, Mode: 0755, ModTime: time.Unix(1700000000, 0)})
+	write(&tar.Header{
+		Name: "p/q/s", Typeflag: tar.TypeSymlink, Linkname: "../../z",
+		Mode: 0777, ModTime: time.Unix(1700000000, 0),
+	})
+	write(&tar.Header{
+		Name: "u", Typeflag: tar.TypeSymlink, Linkname: "p/q/s/../../x",
+		Mode: 0777, ModTime: time.Unix(1700000000, 0),
+	})
+	content := []byte("evil\n")
+	write(&tar.Header{
+		Name: "u", Mode: 0644, Size: int64(len(content)),
+		ModTime: time.Unix(1700000000, 0),
+	})
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := extractTar(&buf, dest); err == nil {
+		t.Fatal("expected rejection of chained symlink escape")
+	}
+
+	// Nothing must have escaped to dest's parent: "x" is where the chain
+	// resolves to, once one directory above destDir.
+	escaped := filepath.Join(filepath.Dir(dest), "x")
+	if _, err := os.Stat(escaped); err == nil {
+		t.Errorf("chained symlink escaped destDir: %s was created", escaped)
+	}
+}
+
+// TestExtractTarAbsoluteMemberName covers an archive built with `tar -P`,
+// whose member names carry a leading "/" (e.g. "/mytool" rather than
+// "mytool"). That leading slash used to survive into relName and get handed
+// to os.Root, which rejects absolute paths outright; extractTar must strip
+// it and extract under destDir like any other member.
+func TestExtractTarAbsoluteMemberName(t *testing.T) {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	content := []byte("hello from absolute member\n")
+	if err := tw.WriteHeader(&tar.Header{
+		Name: "/mytool", Mode: 0755, Size: int64(len(content)),
+		ModTime: time.Unix(1700000000, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := extractTar(&buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+	assertExtracted(t, dest, "mytool", string(content))
 }

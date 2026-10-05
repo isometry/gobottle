@@ -59,7 +59,28 @@ func ExtractTarBz2(archivePath, destDir string) error {
 }
 
 // extractTar walks a tar stream, writing entries under destDir.
+//
+// Every write goes through os.Root, which confines all filesystem access to
+// destDir at the OS level as each path component (including symlinks) is
+// actually resolved. That is the real defence: a lexical check on header
+// text can be fooled by a chain of symlinks whose individual hops each look
+// safe in isolation but whose combined resolution escapes destDir (e.g. a
+// link "s" that lands back inside destDir, followed by a link "u" whose
+// remaining ".." components are then counted from s's real target rather
+// than from u's own directory). The header.Name and Linkname lexical checks
+// below stay because they give an early, specific error for the common
+// cases; os.Root is what actually prevents escape.
 func extractTar(r io.Reader, destDir string) error {
+	// os.Root requires destDir to already exist.
+	if err := os.MkdirAll(destDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+	root, err := os.OpenRoot(destDir)
+	if err != nil {
+		return fmt.Errorf("failed to open destination directory: %w", err)
+	}
+	defer func() { _ = root.Close() }()
+
 	tr := tar.NewReader(r)
 
 	for {
@@ -78,21 +99,30 @@ func extractTar(r io.Reader, destDir string) error {
 		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid file path: %s", header.Name)
 		}
+		// Derive relName from the already-validated target rather than from
+		// header.Name directly: a member name with a leading "/" (e.g. from
+		// `tar -P`) stays absolute through filepath.Clean, and os.Root
+		// rejects an absolute path outright even though target above
+		// resolves safely under destDir.
+		relName, err := filepath.Rel(filepath.Clean(destDir), filepath.Clean(target))
+		if err != nil {
+			return fmt.Errorf("invalid file path: %s", header.Name)
+		}
 
 		switch header.Typeflag {
 		case tar.TypeDir:
-			if err := os.MkdirAll(target, 0755); err != nil {
+			if err := root.MkdirAll(relName, 0755); err != nil {
 				return fmt.Errorf("failed to create directory: %w", err)
 			}
 
 		case tar.TypeReg:
 			// Create parent directory if needed
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(relName), 0755); err != nil {
 				return fmt.Errorf("failed to create parent directory: %w", err)
 			}
 
 			// Create file
-			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
+			outFile, err := root.OpenFile(relName, os.O_CREATE|os.O_RDWR|os.O_TRUNC, os.FileMode(header.Mode))
 			if err != nil {
 				return fmt.Errorf("failed to create file: %w", err)
 			}
@@ -104,12 +134,22 @@ func extractTar(r io.Reader, destDir string) error {
 			outFile.Close()
 
 		case tar.TypeSymlink:
+			// Reject a link target that escapes destDir, whether given as an
+			// absolute path or as a relative path that climbs out via "..".
+			if filepath.IsAbs(header.Linkname) {
+				return fmt.Errorf("invalid file path: %s -> %s", header.Name, header.Linkname)
+			}
+			resolved := filepath.Clean(filepath.Join(filepath.Dir(target), header.Linkname))
+			if !strings.HasPrefix(resolved, filepath.Clean(destDir)+string(os.PathSeparator)) {
+				return fmt.Errorf("invalid file path: %s -> %s", header.Name, header.Linkname)
+			}
+
 			// Create parent directory if needed
-			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+			if err := root.MkdirAll(filepath.Dir(relName), 0755); err != nil {
 				return fmt.Errorf("failed to create parent directory: %w", err)
 			}
 
-			if err := os.Symlink(header.Linkname, target); err != nil {
+			if err := root.Symlink(header.Linkname, relName); err != nil {
 				return fmt.Errorf("failed to create symlink: %w", err)
 			}
 		}

@@ -129,9 +129,29 @@ is the input to 'gobottle push' and 'gobottle release'.`,
 func bottleBinaries(cfg *config.Config) []bottle.BinaryInstall {
 	out := make([]bottle.BinaryInstall, len(cfg.Binaries))
 	for i, b := range cfg.Binaries {
-		out[i] = bottle.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath}
+		out[i] = bottle.BinaryInstall{Name: b.Name, InstallPath: b.InstallPath, Links: b.Links}
 	}
 	return out
+}
+
+// ignoredSymlinkWarnings returns one warning message per symlink in
+// b.IgnoredSymlinks not already present in warned (keyed "name -> target"),
+// marking each as warned as it goes. The same archive symlinks recur across
+// every artifact and platform in a run, so this keeps each distinct symlink
+// warning exactly once.
+func ignoredSymlinkWarnings(b *bottle.Bottle, warned map[string]bool) []string {
+	var msgs []string
+	for _, s := range b.IgnoredSymlinks {
+		key := s.Name + " -> " + s.Target
+		if warned[key] {
+			continue
+		}
+		warned[key] = true
+		msgs = append(msgs, fmt.Sprintf(
+			"artifact contains symlink %s -> %s, which is not declared in binaries[].links and will not be bottled",
+			s.Name, s.Target))
+	}
+	return msgs
 }
 
 // findHostArtifact returns the artifact runnable on this machine, or nil.
@@ -180,7 +200,14 @@ func generateCompletions(ctx context.Context, cfg *config.Config, source artifac
 		if b.InstallPath != "bin" {
 			continue
 		}
-		entries, err := bottle.GenerateCompletions(ctx, filepath.Join(extractDir, b.Name), cfg.Formula.Install.CompletionsCommand, workDir)
+		// Resolve through any symlink (as Build does) rather than joining
+		// extractDir and running the result directly: a symlinked binary
+		// could otherwise make this run a host binary outside the artifact.
+		resolved, err := bottle.ResolveBinary(extractDir, b.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve binary %s for completions: %w", b.Name, err)
+		}
+		entries, err := bottle.GenerateCompletions(ctx, resolved, b.Name, cfg.Formula.Install.CompletionsCommand, workDir)
 		if err != nil {
 			return nil, err
 		}
@@ -290,6 +317,10 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 		}
 	}
 
+	// Dedup across the whole run: the same archive symlinks recur in every
+	// artifact and platform, so each distinct one should only warn once.
+	warned := map[string]bool{}
+
 	for _, art := range artifacts {
 		platforms := platformInfo.GetPlatformsForOS(art.OS, art.Arch)
 		platforms = platform.FilterPlatforms(platforms, cfg.Bottle.Platforms, cfg.Bottle.ExcludePlatforms)
@@ -328,6 +359,9 @@ func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manif
 				return nil, fmt.Errorf("failed to build bottle for %s: %w", plat.Tag, err)
 			}
 			progress("  built %s (%s)", b.BottleName(), b.SHA256[:12])
+			for _, msg := range ignoredSymlinkWarnings(b, warned) {
+				warn("%s", msg)
+			}
 
 			entry, err := manifestEntry(b)
 			if err != nil {

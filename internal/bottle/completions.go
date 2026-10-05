@@ -32,10 +32,14 @@ var completionShells = []struct {
 // GenerateCompletions runs `<binaryPath> <command...> <shell>` for bash, zsh
 // and fish, writes each captured script under dir, and returns keg-relative
 // archive path -> local path entries suitable for BuildOptions.ExtraFiles.
-// Any shell failing to generate is an error: shipping partial completions
-// silently is worse than failing the build.
-func GenerateCompletions(ctx context.Context, binaryPath string, command []string, dir string) (map[string]string, error) {
-	name := filepath.Base(binaryPath)
+// name is the binary's configured (installed) name, used for the archive
+// paths, the local file names and argv[0] of the exec'd process; it can
+// differ from binaryPath's basename, since binaryPath may already be
+// resolved through a symlink (e.g. ResolveBinary dereferencing an alias or
+// an unpredictable versioned release filename). Any shell failing to
+// generate is an error: shipping partial completions silently is worse than
+// failing the build.
+func GenerateCompletions(ctx context.Context, binaryPath, name string, command []string, dir string) (map[string]string, error) {
 	files := make(map[string]string, len(completionShells))
 
 	for _, s := range completionShells {
@@ -43,6 +47,11 @@ func GenerateCompletions(ctx context.Context, binaryPath string, command []strin
 
 		cctx, cancel := context.WithTimeout(ctx, completionTimeout)
 		cmd := exec.CommandContext(cctx, binaryPath, args...)
+		// Run it under its installed name: binaryPath is what actually
+		// executes, but a CLI that introspects its own invocation name (e.g.
+		// cobra's completion header) must see the name it will be poured
+		// under, not binaryPath's basename.
+		cmd.Args[0] = name
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr

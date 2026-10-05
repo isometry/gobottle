@@ -269,8 +269,9 @@ type TapConfig struct {
 // BinaryConfig defines a binary to include in bottles. A bare string in YAML
 // is accepted as shorthand for {name: ...}.
 type BinaryConfig struct {
-	Name        string `mapstructure:"name"`
-	InstallPath string `mapstructure:"install_path"`
+	Name        string   `mapstructure:"name"`
+	InstallPath string   `mapstructure:"install_path"`
+	Links       []string `mapstructure:"links"` // symlinked alias names, e.g. kubectl plugin names
 }
 
 // boolOr dereferences a tri-state boolean, returning def when unset.
@@ -284,6 +285,12 @@ func boolOr(b *bool, def bool) bool {
 // boolPtr returns a pointer to b, for materializing tri-state defaults.
 func boolPtr(b bool) *bool {
 	return &b
+}
+
+// validFileName reports whether s is safe to use as a single path segment:
+// non-empty, free of path separators, and neither "." nor "..".
+func validFileName(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, `/\`)
 }
 
 // SetDefaults sets default values for the configuration
@@ -569,12 +576,46 @@ func (c *Config) ValidateFor(needToken bool) error {
 			Message: "at least one binary is required",
 		})
 	}
+	// seen starts with every binary name, so a link can never collide with
+	// (or shadow) a real binary; it then accumulates link names as they're
+	// validated, so links must also be unique across the whole formula.
+	// Keyed on strings.ToLower: APFS (macOS's default filesystem) is
+	// case-insensitive, so e.g. links "kubectl-X" and "kubectl-x" would
+	// clobber each other when poured even though they compare unequal here.
+	seen := make(map[string]bool, len(c.Binaries))
+	for _, bin := range c.Binaries {
+		seen[strings.ToLower(bin.Name)] = true
+	}
 	for i, bin := range c.Binaries {
 		if bin.Name == "" {
 			errs = append(errs, &ValidationError{
 				Field:   fmt.Sprintf("binaries[%d].name", i),
 				Message: "binary name is required",
 			})
+		}
+		for j, link := range bin.Links {
+			field := fmt.Sprintf("binaries[%d].links[%d]", i, j)
+			switch {
+			case link == "":
+				errs = append(errs, &ValidationError{
+					Field:   field,
+					Message: "link name is required",
+				})
+			case !validFileName(link):
+				errs = append(errs, &ValidationError{
+					Field:   field,
+					Value:   link,
+					Message: `link name must not contain '/' or '\', and must not be "." or ".."`,
+				})
+			case seen[strings.ToLower(link)]:
+				errs = append(errs, &ValidationError{
+					Field:   field,
+					Value:   link,
+					Message: "link name must be unique across the formula (case-insensitive) and must not equal any binary name",
+				})
+			default:
+				seen[strings.ToLower(link)] = true
+			}
 		}
 	}
 

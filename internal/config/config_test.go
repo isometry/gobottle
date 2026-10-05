@@ -608,6 +608,163 @@ func TestBinaryNames(t *testing.T) {
 	}
 }
 
+func TestValidateBinaryLinks(t *testing.T) {
+	// Every case shares the required non-binary fields via baseConfig, and
+	// only varies the binaries slice.
+	baseConfig := func(binaries []BinaryConfig) *Config {
+		return &Config{
+			Formula:  FormulaConfig{Name: "myformula"},
+			Version:  "1.0.0",
+			Source:   SourceConfig{Type: "local", DistPath: t.TempDir()},
+			Registry: RegistryConfig{Owner: "myorg", Token: "token"},
+			Tap:      TapConfig{Owner: "myorg"},
+			Binaries: binaries,
+		}
+	}
+
+	tests := []struct {
+		name        string
+		binaries    []BinaryConfig
+		expectError bool
+		errorField  string
+	}{
+		{
+			name: "valid links",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"kubectl-milestone", "kubectl_complete-milestone"}},
+			},
+			expectError: false,
+		},
+		{
+			name: "empty link",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{""}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link contains a slash",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"kubectl/milestone"}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link contains a backslash",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{`kubectl\milestone`}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link is dot",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"."}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link is dot-dot",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{".."}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link duplicates another binary's link",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"kubectl-milestone"}},
+				{Name: "othertool", Links: []string{"kubectl-milestone"}},
+			},
+			expectError: true,
+			errorField:  "binaries[1].links[0]",
+		},
+		{
+			name: "link duplicates its own binary's other link",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"kubectl-milestone", "kubectl-milestone"}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[1]",
+		},
+		{
+			name: "link equals a binary name",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl"},
+				{Name: "othertool", Links: []string{"milestonectl"}},
+			},
+			expectError: true,
+			errorField:  "binaries[1].links[0]",
+		},
+		{
+			name: "link differs from a binary name only by case",
+			binaries: []BinaryConfig{
+				{Name: "foo", Links: []string{"Foo"}},
+			},
+			expectError: true,
+			errorField:  "binaries[0].links[0]",
+		},
+		{
+			name: "link duplicates another link only by case",
+			binaries: []BinaryConfig{
+				{Name: "milestonectl", Links: []string{"kubectl-X"}},
+				{Name: "othertool", Links: []string{"kubectl-x"}},
+			},
+			expectError: true,
+			errorField:  "binaries[1].links[0]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := baseConfig(tt.binaries)
+			cfg.SetDefaults()
+			err := cfg.Validate()
+
+			if !tt.expectError {
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error but got none")
+			}
+			found := false
+			if me, ok := err.(*MultiError); ok {
+				for _, e := range me.Errors {
+					if ve, ok := e.(*ValidationError); ok && ve.Field == tt.errorField {
+						found = true
+						break
+					}
+				}
+			} else if ve, ok := err.(*ValidationError); ok && ve.Field == tt.errorField {
+				found = true
+			}
+			if !found {
+				t.Errorf("expected error for field %q, got: %v", tt.errorField, err)
+			}
+		})
+	}
+}
+
+func TestBinaryNamesExcludesLinks(t *testing.T) {
+	cfg := &Config{
+		Binaries: []BinaryConfig{
+			{Name: "milestonectl", Links: []string{"kubectl-milestone", "kubectl_complete-milestone"}},
+		},
+	}
+	names := cfg.BinaryNames()
+	if len(names) != 1 || names[0] != "milestonectl" {
+		t.Errorf("BinaryNames() = %v, want [milestonectl] (links must never appear)", names)
+	}
+}
+
 func TestParseGitURL(t *testing.T) {
 	tests := []struct {
 		url           string

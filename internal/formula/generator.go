@@ -83,15 +83,12 @@ const defaultTemplate = `class {{ .ClassName }} < Formula
 {{- end }}
 {{- else }}
 {{- range .Binaries }}
-{{- if eq .InstallPath "bin" }}
-    bin.install {{ quote .Name }}
-{{- else if eq .InstallPath "libexec" }}
-    libexec.install {{ quote .Name }}
-{{- else }}
-    (prefix/{{ quote .InstallPath }}).install {{ quote .Name }}
+    {{ .Dir }}.install {{ quote .Name }}
 {{- end }}
 {{- end }}
-{{- end }}
+{{- range .Binaries }}{{ $bin := . }}{{ range .Links }}
+    {{ $bin.Dir }}.install_symlink {{ quote $bin.Name }} => {{ quote . }}
+{{- end }}{{ end }}
 {{- if .Completions }}
 {{- $cmd := .Completions }}
 {{- range .BinBinaries }}

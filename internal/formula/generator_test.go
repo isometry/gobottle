@@ -428,6 +428,126 @@ func TestGenerateInstallPaths(t *testing.T) {
 	}
 }
 
+func TestGenerateBinaryLinksNonBuild(t *testing.T) {
+	f := &Formula{
+		Name: "milestonectl",
+		URL:  "https://example.com/milestonectl-1.0.0.tar.gz",
+		Binaries: []BinaryInstall{
+			{Name: "milestonectl", InstallPath: "bin", Links: []string{"kubectl-milestone", "kubectl_complete-milestone"}},
+			{Name: "helper", InstallPath: "libexec", Links: []string{"helper-alias"}},
+			{Name: "plugin", InstallPath: "share/tool/plugins", Links: []string{"plugin-alias"}},
+		},
+		Completions: []string{"completion"},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	want := `  def install
+    bin.install "milestonectl"
+    libexec.install "helper"
+    (prefix/"share/tool/plugins").install "plugin"
+    bin.install_symlink "milestonectl" => "kubectl-milestone"
+    bin.install_symlink "milestonectl" => "kubectl_complete-milestone"
+    libexec.install_symlink "helper" => "helper-alias"
+    (prefix/"share/tool/plugins").install_symlink "plugin" => "plugin-alias"
+    generate_completions_from_executable(bin/"milestonectl", "completion")
+  end
+`
+	if !strings.Contains(got, want) {
+		t.Errorf("install block mismatch:\n%s\nwant contains:\n%s", got, want)
+	}
+}
+
+func TestGenerateBinaryLinksSourceBuild(t *testing.T) {
+	f := &Formula{
+		Name: "milestonectl",
+		URL:  "https://example.com/milestonectl-1.0.0.tar.gz",
+		Binaries: []BinaryInstall{
+			{Name: "milestonectl", InstallPath: "bin", Links: []string{"kubectl-milestone"}},
+		},
+		Completions: []string{"completion"},
+		Build: &SourceBuild{
+			Targets: []GoTarget{{Package: ".", Binary: "milestonectl", InstallPath: "bin"}},
+		},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	want := `  def install
+    system "go", "build", *std_go_args(), "."
+    bin.install_symlink "milestonectl" => "kubectl-milestone"
+    generate_completions_from_executable(bin/"milestonectl", "completion")
+  end
+`
+	if !strings.Contains(got, want) {
+		t.Errorf("install block mismatch:\n%s\nwant contains:\n%s", got, want)
+	}
+}
+
+func TestGenerateBinaryLinksAfterModDirWrapper(t *testing.T) {
+	// With a mod_dir wrapper, the install_symlink lines must come after the
+	// wrapper's closing `end`, not inside the `cd … do` block.
+	f := &Formula{
+		Name: "milestonectl",
+		URL:  "https://example.com/milestonectl-1.0.0.tar.gz",
+		Binaries: []BinaryInstall{
+			{Name: "milestonectl", InstallPath: "bin", Links: []string{"kubectl-milestone"}},
+		},
+		Build: &SourceBuild{
+			ModDir:  "src",
+			Targets: []GoTarget{{Package: ".", Binary: "milestonectl", InstallPath: "bin"}},
+		},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	want := `  def install
+    cd "src" do
+      system "go", "build", *std_go_args(), "."
+    end
+    bin.install_symlink "milestonectl" => "kubectl-milestone"
+  end
+`
+	if !strings.Contains(got, want) {
+		t.Errorf("install block mismatch:\n%s\nwant contains:\n%s", got, want)
+	}
+}
+
+func TestGenerateNoLinksNoStrayLines(t *testing.T) {
+	// Without any configured links, the def install block must render with
+	// no extra blank lines between the install line(s) and whatever follows
+	// (completions, or the closing `end`).
+	f := &Formula{
+		Name:        "tool",
+		URL:         "https://example.com/tool-1.0.0.tar.gz",
+		Binaries:    []BinaryInstall{{Name: "tool", InstallPath: "bin"}},
+		Completions: []string{"completion"},
+	}
+
+	got, err := Generate(f, "")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+
+	want := `  def install
+    bin.install "tool"
+    generate_completions_from_executable(bin/"tool", "completion")
+  end
+`
+	if !strings.Contains(got, want) {
+		t.Errorf("install block mismatch:\n%s\nwant contains:\n%s", got, want)
+	}
+}
+
 func TestGenerateCompletionsCommand(t *testing.T) {
 	f := &Formula{
 		Name:        "tool",

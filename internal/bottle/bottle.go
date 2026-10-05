@@ -20,6 +20,17 @@ type Bottle struct {
 	Cellar             string            // e.g., ":any_skip_relocation"
 	Rebuild            int               // Rebuild number (usually 0)
 	Tab                *Tab              // INSTALL_RECEIPT content (also pushed as sh.brew.tab)
+	IgnoredSymlinks    []IgnoredSymlink  // artifact symlinks not declared as a binary or link (not bottled)
+}
+
+// IgnoredSymlink is a symlink found at the top level of the extracted
+// artifact whose name is neither a configured binary nor one of its links.
+// gobottle never bottles it: the config is the single source of truth for
+// the bottle's layout, so it is reported for the caller to warn about
+// instead.
+type IgnoredSymlink struct {
+	Name   string
+	Target string
 }
 
 // FileSize returns the size of the bottle tarball in bytes.

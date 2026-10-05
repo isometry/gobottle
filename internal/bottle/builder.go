@@ -3,10 +3,13 @@ package bottle
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/isometry/gobottle/internal/platform"
@@ -24,6 +27,7 @@ type Builder struct {
 type BinaryInstall struct {
 	Name        string
 	InstallPath string
+	Links       []string // symlinked alias names, installed alongside Name
 }
 
 // BuildOptions contains the parameters for building a bottle
@@ -85,21 +89,44 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	}
 
 	// Map of archive path -> local path, all rooted at <formula>/<version>/.
+	// links is a separate archive path -> linkname map: each entry becomes a
+	// relative symlink in the bottle tarball rather than a copied file.
 	keg := path.Join(opts.Formula, opts.Version)
 	files := make(map[string]string)
+	links := make(map[string]string)
 
+	// declared collects every name Build itself accounts for at the artifact
+	// root (binaries and their links), so the ignored-symlink scan below
+	// knows what *not* to report.
 	binaryNames := make([]string, 0, len(opts.Binaries))
+	declared := make(map[string]bool, len(opts.Binaries))
 	for _, binary := range opts.Binaries {
-		srcPath := filepath.Join(extractDir, binary.Name)
-		if _, err := os.Stat(srcPath); err != nil {
-			return nil, fmt.Errorf("binary %s not found in artifact: %w", binary.Name, err)
+		resolved, err := ResolveBinary(extractDir, binary.Name)
+		if err != nil {
+			return nil, err
 		}
+
 		installPath := binary.InstallPath
 		if installPath == "" {
 			installPath = "bin"
 		}
-		files[path.Join(keg, installPath, binary.Name)] = srcPath
+		files[path.Join(keg, installPath, binary.Name)] = resolved
 		binaryNames = append(binaryNames, binary.Name)
+		declared[binary.Name] = true
+
+		for _, l := range binary.Links {
+			links[path.Join(keg, installPath, l)] = binary.Name
+			declared[l] = true
+		}
+	}
+
+	// Symlinks the artifact ships at its root but that binaries[].links
+	// doesn't declare (e.g. a goreleaser alias like kubectl-foo -> mytool)
+	// are never bottled: the config is the single source of truth for the
+	// bottle's layout. They're surfaced here so the caller can warn instead.
+	ignoredSymlinks, err := findIgnoredSymlinks(extractDir, declared)
+	if err != nil {
+		return nil, err
 	}
 
 	for archivePath, localPath := range opts.ExtraFiles {
@@ -152,7 +179,7 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 	bottleName := bottleFilename(opts.Formula, opts.Version, opts.Platform.Tag, opts.Rebuild)
 	bottlePath := filepath.Join(outDir, bottleName)
 
-	res, err := writeTarGz(bottlePath, files, sourceDate)
+	res, err := writeTarGz(bottlePath, files, links, sourceDate)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bottle tarball: %w", err)
 	}
@@ -169,7 +196,75 @@ func (b *Builder) Build(ctx context.Context, opts BuildOptions) (*Bottle, error)
 		Cellar:             opts.Cellar,
 		Rebuild:            opts.Rebuild,
 		Tab:                tab,
+		IgnoredSymlinks:    ignoredSymlinks,
 	}, nil
+}
+
+// findIgnoredSymlinks scans the top level of dir (not recursively: binaries
+// are only ever looked up at the root) for symlink entries whose name isn't
+// in declared, returning them sorted by name.
+func findIgnoredSymlinks(dir string, declared map[string]bool) ([]IgnoredSymlink, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read artifact directory: %w", err)
+	}
+
+	var ignored []IgnoredSymlink
+	for _, entry := range entries {
+		if entry.Type()&fs.ModeSymlink == 0 || declared[entry.Name()] {
+			continue
+		}
+		target, err := os.Readlink(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("failed to read symlink %s: %w", entry.Name(), err)
+		}
+		ignored = append(ignored, IgnoredSymlink{Name: entry.Name(), Target: target})
+	}
+	sort.Slice(ignored, func(i, j int) bool { return ignored[i].Name < ignored[j].Name })
+	return ignored, nil
+}
+
+// ResolveBinary resolves name within dir (an extracted artifact directory,
+// or a directory artifact used as-is) to a regular file, dereferencing any
+// symlink so callers always see the same content a poured bottle would
+// contain. A configured binary may itself be a symlink inside the artifact
+// (a release archive can ship a dereferenced copy under an unpredictable
+// versioned name, e.g. mytool -> mytool_1.2.3, or an alias such as
+// kubectl-mytool -> mytool). It is an error for name to be missing,
+// dangling, to resolve outside dir, or to resolve to anything but a regular
+// file.
+func ResolveBinary(dir, name string) (string, error) {
+	// Resolve dir itself before using it as the containment boundary below:
+	// on macOS $TMPDIR sits under /var, a symlink to /private/var, so
+	// comparing raw paths would reject every legitimate binary.
+	resolvedDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve artifact directory: %w", err)
+	}
+
+	resolved, err := filepath.EvalSymlinks(filepath.Join(dir, name))
+	if err != nil {
+		return "", fmt.Errorf("binary %s not found in artifact: %w", name, err)
+	}
+
+	// A resolved path that isn't strictly below resolvedDir either escapes
+	// it (rel starts with "..") or *is* resolvedDir (rel == "."), which the
+	// regular-file check below rejects anyway, so no separate equality case
+	// is needed here.
+	rel, err := filepath.Rel(resolvedDir, resolved)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("binary %s resolves outside the artifact: %s", name, resolved)
+	}
+
+	info, err := os.Lstat(resolved)
+	if err != nil {
+		return "", fmt.Errorf("binary %s not found in artifact: %w", name, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("binary %s is not a regular file (resolved to %s)", name, resolved)
+	}
+
+	return resolved, nil
 }
 
 // Close cleans up the work directory
