@@ -337,6 +337,44 @@ func TestBuildFromDirectoryArtifact(t *testing.T) {
 	}
 }
 
+// TestBuildNormalisesFileModes covers host-dependent source modes: regular
+// files enter the bottle as 0755 if any execute bit is set, otherwise 0644.
+func TestBuildNormalisesFileModes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mytool"), []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile is subject to the umask, so set the modes explicitly.
+	if err := os.Chmod(filepath.Join(dir, "mytool"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	comp := filepath.Join(t.TempDir(), "mytool.bash")
+	if err := os.WriteFile(comp, []byte("completion\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(comp, 0600); err != nil {
+		t.Fatal(err)
+	}
+	opts := testBuildOptions(dir)
+	opts.ExtraFiles = map[string]string{"etc/bash_completion.d/mytool": comp}
+
+	b := buildOnce(t, opts)
+
+	headers := readTarHeaders(t, b.Path)
+	for name, want := range map[string]int64{
+		"mytool/1.2.3/bin/mytool":                   0755,
+		"mytool/1.2.3/etc/bash_completion.d/mytool": 0644,
+	} {
+		hdr, ok := headers[name]
+		if !ok {
+			t.Fatalf("%s missing (have %v)", name, headerNames(headers))
+		}
+		if hdr.Mode != want {
+			t.Errorf("%s mode = %#o, want %#o", name, hdr.Mode, want)
+		}
+	}
+}
+
 func TestBuildExtraFiles(t *testing.T) {
 	artifact := makeArtifact(t, "mytool")
 	opts := testBuildOptions(artifact)

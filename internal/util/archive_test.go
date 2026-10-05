@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -219,7 +220,8 @@ func TestExtractTarKeepsOutOfTreeSymlinks(t *testing.T) {
 	}
 }
 
-// TestExtractTarRejectsChainedSymlinkEscape covers a chain of symlinks that
+// TestExtractTarRejectsChainedSymlinkEscape (named for the original
+// lexical-check scenario; the link is now replaced, not rejected) covers a chain of symlinks that
 // each look safe under a purely lexical check but whose combined resolution
 // escapes destDir:
 //
@@ -239,8 +241,9 @@ func TestExtractTarKeepsOutOfTreeSymlinks(t *testing.T) {
 // os.OpenFile does follow it, though, so writing directly to the path "u"
 // resolves through the whole chain and - under a lexical-check-only
 // implementation - creates and writes the file one directory above destDir,
-// no error returned. extractTar must reject this, and nothing may be
-// created outside destDir.
+// no error returned. extractTar must not write through the chain: the
+// regular file replaces the link inside destDir and nothing may be created
+// outside destDir.
 func TestExtractTarRejectsChainedSymlinkEscape(t *testing.T) {
 	dest := t.TempDir()
 
@@ -273,9 +276,12 @@ func TestExtractTarRejectsChainedSymlinkEscape(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := extractTar(&buf, dest); err == nil {
-		t.Fatal("expected rejection of chained symlink escape")
+	// The final "u" replaces the symlink rather than writing through it, so
+	// extraction now succeeds; the invariant is that nothing escapes.
+	if err := extractTar(&buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
 	}
+	assertRegular(t, filepath.Join(dest, "u"), "evil\n")
 
 	// Nothing must have escaped to dest's parent: "x" is where the chain
 	// resolves to, once one directory above destDir.
@@ -471,4 +477,273 @@ func TestExtractZipDotRootEntry(t *testing.T) {
 		t.Fatalf("ExtractZip: %v", err)
 	}
 	assertExtracted(t, dest, "mytool", "hello from zip\n")
+}
+
+// tarEntry is one tar member for writeTar: a regular file by default, or the
+// given Typeflag (link is the Linkname for symlinks and hardlinks).
+type tarEntry struct {
+	name, content, link string
+	typeflag            byte
+}
+
+func writeTar(t *testing.T, entries []tarEntry) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	for _, e := range entries {
+		hdr := &tar.Header{
+			Name: e.name, Typeflag: e.typeflag, Linkname: e.link,
+			Mode: 0755, ModTime: time.Unix(1700000000, 0),
+		}
+		if hdr.Typeflag == 0 {
+			hdr.Typeflag = tar.TypeReg
+			hdr.Size = int64(len(e.content))
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatal(err)
+		}
+		if hdr.Typeflag == tar.TypeReg {
+			if _, err := tw.Write([]byte(e.content)); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &buf
+}
+
+func assertRegular(t *testing.T, path, wantContent string) {
+	t.Helper()
+	info, err := os.Lstat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Errorf("%s is not a regular file: mode = %v", path, info.Mode())
+	}
+	assertExtracted(t, filepath.Dir(path), filepath.Base(path), wantContent)
+}
+
+// TestExtractIgnoresUmask covers a restrictive umask: extracted modes must
+// match the archive, not be masked down by the process umask. Not parallel,
+// because the umask is process-wide.
+func TestExtractIgnoresUmask(t *testing.T) {
+	old := syscall.Umask(0o077)
+	t.Cleanup(func() { syscall.Umask(old) })
+
+	check := func(t *testing.T, dest string) {
+		t.Helper()
+		info, err := os.Stat(filepath.Join(dest, "mytool"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := info.Mode(); got != 0755 {
+			t.Errorf("mode = %v, want 0755", got)
+		}
+	}
+
+	t.Run("tar", func(t *testing.T) {
+		dest := t.TempDir()
+		if err := extractTar(writeTar(t, []tarEntry{{name: "mytool", content: "x"}}), dest); err != nil {
+			t.Fatalf("extractTar: %v", err)
+		}
+		check(t, dest)
+	})
+	t.Run("zip", func(t *testing.T) {
+		dest := t.TempDir()
+		if err := ExtractZip(writeZip(t, []zipEntry{{name: "mytool", content: "x"}}), dest); err != nil {
+			t.Fatalf("ExtractZip: %v", err)
+		}
+		check(t, dest)
+	})
+}
+
+// TestExtractReplacesLinkInsteadOfWritingThrough covers duplicate member
+// names: a regular file following a symlink of the same name must replace the
+// link, not truncate and overwrite the link's in-tree target.
+func TestExtractReplacesLinkInsteadOfWritingThrough(t *testing.T) {
+	check := func(t *testing.T, dest string) {
+		t.Helper()
+		assertExtracted(t, dest, "mytool_1.2.3", "A\n")
+		assertRegular(t, filepath.Join(dest, "mytool"), "B\n")
+	}
+
+	t.Run("tar", func(t *testing.T) {
+		dest := t.TempDir()
+		buf := writeTar(t, []tarEntry{
+			{name: "mytool_1.2.3", content: "A\n"},
+			{name: "mytool", typeflag: tar.TypeSymlink, link: "mytool_1.2.3"},
+			{name: "mytool", content: "B\n"},
+		})
+		if err := extractTar(buf, dest); err != nil {
+			t.Fatalf("extractTar: %v", err)
+		}
+		check(t, dest)
+	})
+	t.Run("zip", func(t *testing.T) {
+		dest := t.TempDir()
+		archive := writeZip(t, []zipEntry{
+			{name: "mytool_1.2.3", content: "A\n"},
+			{name: "mytool", link: "mytool_1.2.3"},
+			{name: "mytool", content: "B\n"},
+		})
+		if err := ExtractZip(archive, dest); err != nil {
+			t.Fatalf("ExtractZip: %v", err)
+		}
+		check(t, dest)
+	})
+}
+
+// TestExtractDuplicateSymlink covers two identical symlink entries, which
+// must not fail with EEXIST.
+func TestExtractDuplicateSymlink(t *testing.T) {
+	t.Run("tar", func(t *testing.T) {
+		dest := t.TempDir()
+		buf := writeTar(t, []tarEntry{
+			{name: "mytool_1.2.3", content: "A\n"},
+			{name: "mytool", typeflag: tar.TypeSymlink, link: "mytool_1.2.3"},
+			{name: "mytool", typeflag: tar.TypeSymlink, link: "mytool_1.2.3"},
+		})
+		if err := extractTar(buf, dest); err != nil {
+			t.Fatalf("extractTar: %v", err)
+		}
+		assertExtracted(t, dest, "mytool", "A\n")
+	})
+	t.Run("zip", func(t *testing.T) {
+		dest := t.TempDir()
+		archive := writeZip(t, []zipEntry{
+			{name: "mytool_1.2.3", content: "A\n"},
+			{name: "mytool", link: "mytool_1.2.3"},
+			{name: "mytool", link: "mytool_1.2.3"},
+		})
+		if err := ExtractZip(archive, dest); err != nil {
+			t.Fatalf("ExtractZip: %v", err)
+		}
+		assertExtracted(t, dest, "mytool", "A\n")
+	})
+}
+
+// TestExtractOverwriteThroughEscapingLink covers a regular file following a
+// link that points outside destDir: the outside file must be untouched and
+// the link replaced by a regular file inside destDir.
+func TestExtractOverwriteThroughEscapingLink(t *testing.T) {
+	setup := func(t *testing.T) (dest, outside string) {
+		t.Helper()
+		outside = filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("precious\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return t.TempDir(), outside
+	}
+	check := func(t *testing.T, dest, outside string) {
+		t.Helper()
+		assertExtracted(t, filepath.Dir(outside), "outside", "precious\n")
+		assertRegular(t, filepath.Join(dest, "evil"), "evil\n")
+	}
+
+	t.Run("tar", func(t *testing.T) {
+		dest, outside := setup(t)
+		buf := writeTar(t, []tarEntry{
+			{name: "evil", typeflag: tar.TypeSymlink, link: outside},
+			{name: "evil", content: "evil\n"},
+		})
+		if err := extractTar(buf, dest); err != nil {
+			t.Fatalf("extractTar: %v", err)
+		}
+		check(t, dest, outside)
+	})
+	t.Run("zip", func(t *testing.T) {
+		dest, outside := setup(t)
+		archive := writeZip(t, []zipEntry{
+			{name: "evil", link: outside},
+			{name: "evil", content: "evil\n"},
+		})
+		if err := ExtractZip(archive, dest); err != nil {
+			t.Fatalf("ExtractZip: %v", err)
+		}
+		check(t, dest, outside)
+	})
+}
+
+func TestExtractTarHardlink(t *testing.T) {
+	dest := t.TempDir()
+	buf := writeTar(t, []tarEntry{
+		{name: "mytool", content: "hello\n"},
+		{name: "bin/kubectl-mytool", typeflag: tar.TypeLink, link: "./mytool"},
+	})
+	if err := extractTar(buf, dest); err != nil {
+		t.Fatalf("extractTar: %v", err)
+	}
+	assertExtracted(t, dest, "bin/kubectl-mytool", "hello\n")
+
+	a, err := os.Stat(filepath.Join(dest, "mytool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.Stat(filepath.Join(dest, "bin/kubectl-mytool"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(a, b) {
+		t.Error("hardlink does not share an inode with its target")
+	}
+}
+
+func TestExtractTarHardlinkRejectsEscape(t *testing.T) {
+	buf := writeTar(t, []tarEntry{
+		{name: "kubectl-mytool", typeflag: tar.TypeLink, link: "../x"},
+	})
+	if err := extractTar(buf, t.TempDir()); err == nil {
+		t.Fatal("expected rejection of hardlink escaping destDir")
+	}
+}
+
+// TestExtractZipSkipsSpecialFiles covers a zip entry with a FIFO mode:
+// nothing may be written for it, as with tar's device and FIFO types.
+func TestExtractZipSkipsSpecialFiles(t *testing.T) {
+	archive := filepath.Join(t.TempDir(), "fifo.zip")
+	f, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(f)
+	hdr := &zip.FileHeader{Name: "pipe", Method: zip.Deflate}
+	hdr.SetMode(os.ModeNamedPipe | 0644)
+	w, err := zw.CreateHeader(hdr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("junk")); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	dest := t.TempDir()
+	if err := ExtractZip(archive, dest); err != nil {
+		t.Fatalf("ExtractZip: %v", err)
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("dest has %d entries, want 0", len(entries))
+	}
+}
+
+func TestExtractZipRejectsOversizedLinkTarget(t *testing.T) {
+	archive := writeZip(t, []zipEntry{
+		{name: "mytool", link: strings.Repeat("a", maxZipLinkTarget+1)},
+	})
+	err := ExtractZip(archive, t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("want oversized-target error, got %v", err)
+	}
 }
