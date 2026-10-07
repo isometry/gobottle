@@ -337,6 +337,44 @@ func TestBuildFromDirectoryArtifact(t *testing.T) {
 	}
 }
 
+// TestBuildNormalisesFileModes covers host-dependent source modes: regular
+// files enter the bottle as 0755 if any execute bit is set, otherwise 0644.
+func TestBuildNormalisesFileModes(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "mytool"), []byte("#!/bin/sh\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	// WriteFile is subject to the umask, so set the modes explicitly.
+	if err := os.Chmod(filepath.Join(dir, "mytool"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	comp := filepath.Join(t.TempDir(), "mytool.bash")
+	if err := os.WriteFile(comp, []byte("completion\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(comp, 0600); err != nil {
+		t.Fatal(err)
+	}
+	opts := testBuildOptions(dir)
+	opts.ExtraFiles = map[string]string{"etc/bash_completion.d/mytool": comp}
+
+	b := buildOnce(t, opts)
+
+	headers := readTarHeaders(t, b.Path)
+	for name, want := range map[string]int64{
+		"mytool/1.2.3/bin/mytool":                   0755,
+		"mytool/1.2.3/etc/bash_completion.d/mytool": 0644,
+	} {
+		hdr, ok := headers[name]
+		if !ok {
+			t.Fatalf("%s missing (have %v)", name, headerNames(headers))
+		}
+		if hdr.Mode != want {
+			t.Errorf("%s mode = %#o, want %#o", name, hdr.Mode, want)
+		}
+	}
+}
+
 func TestBuildExtraFiles(t *testing.T) {
 	artifact := makeArtifact(t, "mytool")
 	opts := testBuildOptions(artifact)
@@ -503,8 +541,8 @@ func headerNames(m map[string]*tar.Header) []string {
 // alongside the configured binaries: an alias link that isn't itself
 // configured must be dropped, and a configured binary that is a symlink
 // must be resolved to a regular file. Dangling and escaping targets must
-// fail the build (the escaping case is actually caught by extractTar during
-// extraction, before Build ever sees it).
+// fail the build (extraction creates such links as-is; ResolveBinary rejects
+// them when a configured binary uses one).
 func TestBuildArtifactSymlinks(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -587,6 +625,31 @@ func TestBuildArtifactSymlinks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestBuildArtifactEscapingSymlinkConfiguredBinary covers a configured binary
+// that is an absolute symlink to a file that exists outside the artifact:
+// extraction keeps the link, and ResolveBinary must refuse it at use time.
+func TestBuildArtifactEscapingSymlinkConfiguredBinary(t *testing.T) {
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("secret\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	artifact := makeArtifactEntries(t, []artifactEntry{{Name: "mytool", Value: "-> " + outside}})
+
+	builder, err := NewBuilder()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = builder.Close() })
+
+	_, err = builder.Build(context.Background(), testBuildOptions(artifact))
+	if err == nil {
+		t.Fatal("Build() succeeded, want error for binary symlink escaping the artifact")
+	}
+	if !strings.Contains(err.Error(), "resolves outside the artifact") {
+		t.Errorf("Build() error = %v, want containing %q", err, "resolves outside the artifact")
 	}
 }
 

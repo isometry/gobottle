@@ -125,11 +125,20 @@ func writeTarGz(outputPath string, files, links map[string]string, mtime time.Ti
 		hdr.Uname = ""
 		hdr.Gname = ""
 		hdr.Format = tar.FormatPAX
-		if hdr.Typeflag == tar.TypeSymlink {
+		switch hdr.Typeflag {
+		case tar.TypeSymlink:
 			// Host-independent: an Lstat-derived symlink mode otherwise
 			// varies by platform, which would make bottle digests depend
 			// on the build host.
 			hdr.Mode = 0777
+		case tar.TypeReg:
+			// Likewise, source modes come from the host (umask, local
+			// builds); pin them to 0755 or 0644.
+			if hdr.Mode&0111 != 0 {
+				hdr.Mode = 0755
+			} else {
+				hdr.Mode = 0644
+			}
 		}
 
 		if err := tw.WriteHeader(hdr); err != nil {
