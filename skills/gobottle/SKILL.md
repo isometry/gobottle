@@ -82,7 +82,7 @@ stages compose in CI:
 | `build`     | Compile/collect artifacts, package bottles + `bottles.json` manifest |
 | `push`      | Publish manifest bottles to the registry (idempotent re-push)  |
 | `release`   | Render formula (with bottle block) and commit it to the tap; without `-i` runs the whole pipeline |
-| `platforms` | List/refresh the discovered Homebrew platform set              |
+| `platforms` | List the supported Homebrew platform set                     |
 | `init`      | Scaffold `.gobottle.yaml`                                       |
 
 Staged: `gobottle build -o json | gobottle push`, then

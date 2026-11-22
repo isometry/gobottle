@@ -227,9 +227,6 @@ type BottleConfig struct {
 
 	// Rebuild number (0 for initial release)
 	Rebuild int `mapstructure:"rebuild"`
-
-	// Force refresh platform cache
-	RefreshPlatforms bool `mapstructure:"refresh_platforms"`
 }
 
 // RegistryConfig defines OCI registry settings
@@ -283,8 +280,10 @@ func boolOr(b *bool, def bool) bool {
 }
 
 // boolPtr returns a pointer to b, for materializing tri-state defaults.
+//
+//go:fix inline
 func boolPtr(b bool) *bool {
-	return &b
+	return new(b)
 }
 
 // validFileName reports whether s is safe to use as a single path segment:
@@ -309,7 +308,7 @@ func (c *Config) SetDefaults() {
 		}
 	}
 	if c.Source.Build.Trimpath == nil {
-		c.Source.Build.Trimpath = boolPtr(true)
+		c.Source.Build.Trimpath = new(true)
 	}
 
 	if c.Bottle.Cellar == "" {
@@ -357,7 +356,7 @@ func (c *Config) SetDefaults() {
 	// install block compiles from source (a bin.install block cannot build a
 	// git checkout, so `brew install --HEAD` would fail).
 	if c.Formula.Head == nil {
-		c.Formula.Head = boolPtr(c.GitURL() != "" && c.Formula.Build.IsEnabled())
+		c.Formula.Head = new(c.GitURL() != "" && c.Formula.Build.IsEnabled())
 	}
 
 	// The formula's source-build recipe inherits from source.build: the same

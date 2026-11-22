@@ -157,7 +157,7 @@ func importGoReleaserBuild(b goreleaserBuild) importedBuild {
 	}
 
 	for _, f := range b.Flags {
-		for _, tok := range strings.Fields(f) {
+		for tok := range strings.FieldsSeq(f) {
 			if tok == "-trimpath" {
 				continue
 			}

@@ -79,7 +79,7 @@ func TestUpdateFormulaResolvesDefaultBranch(t *testing.T) {
 			t.Errorf("commit targeted branch %v, want master", body.Branch)
 		}
 		_ = json.NewEncoder(w).Encode(github.RepositoryContentResponse{
-			Commit: github.Commit{SHA: new("abc123")},
+			SHA: new("abc123"),
 		})
 	})
 
@@ -182,7 +182,7 @@ func TestUpdateFormulaChangedCommits(t *testing.T) {
 			t.Errorf("update sent blob sha %v, want blob123", body.SHA)
 		}
 		_ = json.NewEncoder(w).Encode(github.RepositoryContentResponse{
-			Commit: github.Commit{SHA: new("new456")},
+			SHA: new("new456"),
 		})
 	})
 

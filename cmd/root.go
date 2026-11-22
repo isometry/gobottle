@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -108,19 +107,4 @@ func initConfig(opts *Options) error {
 	}
 
 	return nil
-}
-
-// GetCacheDir returns the cache directory for gobottle
-func GetCacheDir() (string, error) {
-	cacheDir, err := os.UserCacheDir()
-	if err != nil {
-		return "", fmt.Errorf("failed to get user cache directory: %w", err)
-	}
-
-	gobottleCache := filepath.Join(cacheDir, "gobottle")
-	if err := os.MkdirAll(gobottleCache, 0755); err != nil {
-		return "", fmt.Errorf("failed to create cache directory: %w", err)
-	}
-
-	return gobottleCache, nil
 }

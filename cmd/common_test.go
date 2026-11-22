@@ -236,8 +236,8 @@ func TestFormulaModelHeadRequiresSourceBuild(t *testing.T) {
 		{
 			name: "explicit head with the source build disabled",
 			mutate: func(c *config.Config) {
-				c.Formula.Head = boolPtr(true)
-				c.Formula.Build.Enabled = boolPtr(false)
+				c.Formula.Head = new(true)
+				c.Formula.Build.Enabled = new(false)
 			},
 		},
 		{
@@ -316,4 +316,5 @@ func TestHasMainPackage(t *testing.T) {
 	}
 }
 
-func boolPtr(b bool) *bool { return &b }
+//go:fix inline
+func boolPtr(b bool) *bool { return new(b) }

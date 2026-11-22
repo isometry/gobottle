@@ -112,10 +112,9 @@ HEAD (falls back to the latest reachable tag). Flag: `--version`.
 | Key                 | Default                 | Notes |
 | ------------------- | ----------------------- | ----- |
 | `cellar`            | `:any_skip_relocation`  | or `:any`, or an absolute cellar path |
-| `platforms`         | all discovered          | e.g. `[arm64_sonoma]`; Linux tags are `x86_64_linux` and `arm64_linux` (the legacy `aarch64_linux` spelling is accepted in filters) |
+| `platforms`         | all supported          | e.g. `[arm64_sonoma]`; Linux tags are `x86_64_linux` and `arm64_linux` (the legacy `aarch64_linux` spelling is accepted in filters) |
 | `exclude_platforms` | `[]`                    | |
 | `rebuild`           | `0`                     | bump when re-bottling the same version |
-| `refresh_platforms` | `false`                 | force platform-cache refresh |
 
 ## registry
 

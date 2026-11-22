@@ -37,7 +37,6 @@ var buildFlagBindings = map[string]string{
 	"exclude-platforms": "bottle.exclude_platforms",
 	"cellar":            "bottle.cellar",
 	"rebuild":           "bottle.rebuild",
-	"refresh-platforms": "bottle.refresh_platforms",
 	"registry":          "registry.host",
 	"registry-path":     "registry.root_path",
 	"tap-owner":         "tap.owner",
@@ -65,7 +64,6 @@ func addBuildFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSlice("exclude-platforms", nil, "platforms to exclude")
 	cmd.Flags().String("cellar", "", "cellar setting: ':any', ':any_skip_relocation' (default), or absolute path")
 	cmd.Flags().Int("rebuild", 0, "rebuild number (increment when re-bottling the same version)")
-	cmd.Flags().Bool("refresh-platforms", false, "force refresh of the platform cache")
 	cmd.Flags().String("registry", "", "OCI registry host (default: ghcr.io)")
 	cmd.Flags().String("registry-path", "", "image path between host and formula name (default: <owner>/<tap minus homebrew->)")
 	cmd.Flags().String("tap-owner", "", "tap owner (default: --owner)")
@@ -221,20 +219,9 @@ func generateCompletions(ctx context.Context, cfg *config.Config, source artifac
 func runBuild(ctx context.Context, cfg *config.Config, outputDir string) (*Manifest, error) {
 	progress("Building bottles for %s %s (source: %s)", cfg.Formula.Name, cfg.Version, cfg.Source.Type)
 
-	// Discover platforms first: for go source this restricts which
-	// GOOS/GOARCH targets get compiled at all.
-	cacheDir, err := GetCacheDir()
-	if err != nil {
-		return nil, err
-	}
-	discoverer, err := platform.NewDiscoverer(cacheDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create platform discoverer: %w", err)
-	}
-	platformInfo, err := discoverer.Discover(ctx, cfg.Bottle.RefreshPlatforms)
-	if err != nil {
-		return nil, fmt.Errorf("failed to discover platforms: %w", err)
-	}
+	// Platforms first: for go source this restricts which GOOS/GOARCH
+	// targets get compiled at all.
+	platformInfo := &platform.Supported
 
 	source, err := createArtifactSource(cfg, buildTargets(platformInfo, cfg))
 	if err != nil {
