@@ -28,10 +28,47 @@ func (v MacOSVersion) String() string {
 	return fmt.Sprintf("%s (macOS %d)", v.Symbol, v.Major)
 }
 
-// PlatformInfo holds discovered platform information
+// PlatformInfo holds platform information
 type PlatformInfo struct {
 	MacOSVersions []MacOSVersion // Supported macOS versions (newest first)
 	LinuxArches   []string       // e.g., ["x86_64", "arm64"]
+}
+
+// Supported is the platform set gobottle targets. Update it when brew adds or
+// drops a macOS release; only the oldest entry affects the bottles produced.
+var Supported = PlatformInfo{
+	MacOSVersions: []MacOSVersion{
+		{Major: 27, Symbol: "golden_gate"},
+		{Major: 26, Symbol: "tahoe"},
+		{Major: 15, Symbol: "sequoia"},
+		{Major: 14, Symbol: "sonoma"},
+		{Major: 13, Symbol: "ventura"},
+		{Major: 12, Symbol: "monterey"},
+	},
+	LinuxArches: []string{"x86_64", "arm64"},
+}
+
+// FormatPlatformList returns a human-readable list of platforms
+func FormatPlatformList(info *PlatformInfo) string {
+	var sb strings.Builder
+
+	sb.WriteString("macOS (Apple Silicon - arm64):\n")
+	for _, v := range info.MacOSVersions {
+		sb.WriteString(fmt.Sprintf("  - arm64_%s (macOS %d)\n", v.Symbol, v.Major))
+	}
+
+	sb.WriteString("\nmacOS (Intel - amd64):\n")
+	for _, v := range info.MacOSVersions {
+		sb.WriteString(fmt.Sprintf("  - %s (macOS %d)\n", v.Symbol, v.Major))
+	}
+
+	sb.WriteString("\nLinux:\n")
+	for _, arch := range info.LinuxArches {
+		goarch := homebrewArchToGoArch(arch)
+		sb.WriteString(fmt.Sprintf("  - %s_linux (%s)\n", arch, goarch))
+	}
+
+	return sb.String()
 }
 
 // GetPlatformsForOS returns the Homebrew platform tag for a given OS/arch.

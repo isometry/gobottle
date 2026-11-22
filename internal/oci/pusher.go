@@ -156,11 +156,9 @@ func (p *Publisher) pushIndex(ctx context.Context, tag string, bottles []*bottle
 			return nil, err
 		}
 		adds = append(adds, mutate.IndexAddendum{
-			Add: img,
-			Descriptor: v1.Descriptor{
-				Platform:    platform,
-				Annotations: annotations,
-			},
+			Add:         img,
+			Platform:    platform,
+			Annotations: annotations,
 		})
 	}
 
@@ -319,8 +317,7 @@ func (p *Publisher) AnonymouslyAccessible(ctx context.Context, tag string) (bool
 	if err == nil {
 		return true, nil
 	}
-	var terr *transport.Error
-	if errors.As(err, &terr) {
+	if terr, ok := errors.AsType[*transport.Error](err); ok {
 		if terr.StatusCode == http.StatusUnauthorized || terr.StatusCode == http.StatusForbidden ||
 			terr.StatusCode == http.StatusNotFound {
 			// GHCR reports private packages as 401/403/404 to anonymous pulls.

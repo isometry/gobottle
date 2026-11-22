@@ -161,8 +161,8 @@ func TestLoadHeadTriState(t *testing.T) {
 		want *bool
 	}{
 		{name: "unset", yaml: "formula:\n  name: mytool\n"},
-		{name: "true", yaml: "formula:\n  name: mytool\n  head: true\n", want: boolPtr(true)},
-		{name: "false", yaml: "formula:\n  name: mytool\n  head: false\n", want: boolPtr(false)},
+		{name: "true", yaml: "formula:\n  name: mytool\n  head: true\n", want: new(true)},
+		{name: "false", yaml: "formula:\n  name: mytool\n  head: false\n", want: new(false)},
 	}
 
 	for _, tt := range tests {

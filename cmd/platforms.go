@@ -11,8 +11,7 @@ import (
 
 // PlatformsOptions holds options for the platforms command
 type PlatformsOptions struct {
-	Refresh bool
-	JSON    bool
+	JSON bool
 }
 
 // NewPlatformsCommand creates the platforms command
@@ -22,36 +21,19 @@ func NewPlatformsCommand(rootOpts *Options) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "platforms",
 		Short: "List supported Homebrew bottle platforms",
-		Long: `List all supported Homebrew bottle platforms discovered from Homebrew's source.
-
-Platforms are auto-discovered from Homebrew's version.rb and cached locally.
-Use --refresh to force refresh the cache.`,
+		Long:  "List the Homebrew bottle platforms gobottle targets.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runPlatforms(cmd, rootOpts, opts)
 		},
 	}
 
-	cmd.Flags().BoolVar(&opts.Refresh, "refresh", false, "force refresh the platform cache")
 	cmd.Flags().BoolVar(&opts.JSON, "json", false, "output in JSON format")
 
 	return cmd
 }
 
 func runPlatforms(cmd *cobra.Command, rootOpts *Options, opts *PlatformsOptions) error {
-	cacheDir, err := GetCacheDir()
-	if err != nil {
-		return err
-	}
-
-	discoverer, err := platform.NewDiscoverer(cacheDir)
-	if err != nil {
-		return fmt.Errorf("failed to create platform discoverer: %w", err)
-	}
-
-	info, err := discoverer.Discover(cmd.Context(), opts.Refresh)
-	if err != nil {
-		return fmt.Errorf("failed to discover platforms: %w", err)
-	}
+	info := &platform.Supported
 
 	if opts.JSON {
 		output := struct {
@@ -99,7 +81,7 @@ func runPlatforms(cmd *cobra.Command, rootOpts *Options, opts *PlatformsOptions)
 		return encoder.Encode(output)
 	}
 
-	fmt.Println("Discovered Homebrew bottle platforms:")
+	fmt.Println("Supported Homebrew bottle platforms:")
 	fmt.Println()
 	fmt.Print(platform.FormatPlatformList(info))
 

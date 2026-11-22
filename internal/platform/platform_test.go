@@ -128,3 +128,15 @@ func TestParsePlatformTagLinux(t *testing.T) {
 		}
 	}
 }
+
+func TestSupportedSortedNewestFirst(t *testing.T) {
+	v := Supported.MacOSVersions
+	if len(v) == 0 {
+		t.Fatal("Supported has no macOS versions")
+	}
+	for i := 1; i < len(v); i++ {
+		if v[i-1].Major <= v[i].Major {
+			t.Errorf("Supported not newest-first at %d: %v", i, v)
+		}
+	}
+}

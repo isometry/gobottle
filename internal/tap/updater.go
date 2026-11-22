@@ -135,9 +135,9 @@ func (u *Updater) UpdateFormula(ctx context.Context, path string, content []byte
 // touched path.
 func (u *Updater) latestCommitFor(ctx context.Context, path string) (string, error) {
 	commits, _, err := u.client.Repositories.ListCommits(ctx, u.owner, u.repo, &github.CommitsListOptions{
-		SHA:         u.branch,
-		Path:        path,
-		ListOptions: github.ListOptions{PerPage: 1},
+		SHA:     u.branch,
+		Path:    path,
+		PerPage: 1,
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to look up the commit for %s: %w", path, err)
@@ -208,7 +208,7 @@ func (u *Updater) BranchExists(ctx context.Context) (bool, error) {
 // IsRepoEmpty checks if the repository has any commits
 func (u *Updater) IsRepoEmpty(ctx context.Context) (bool, error) {
 	_, resp, err := u.client.Repositories.ListCommits(ctx, u.owner, u.repo, &github.CommitsListOptions{
-		ListOptions: github.ListOptions{PerPage: 1},
+		PerPage: 1,
 	})
 	if err != nil {
 		// 409 Conflict means empty repository

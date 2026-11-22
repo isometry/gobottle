@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -49,8 +50,7 @@ func ParseArtifactName(filename string) (os, arch string, ok bool) {
 
 	// Scan from the end for arch and os
 	// Common patterns: darwin_amd64, linux_arm64, etc.
-	for i := len(parts) - 1; i >= 0; i-- {
-		part := parts[i]
+	for _, part := range slices.Backward(parts) {
 
 		// Check if this looks like an architecture
 		if arch == "" {

@@ -59,7 +59,7 @@ func RubyLdflags(tmplText, commitExpr string) ([]string, error) {
 	}
 
 	var tokens []string
-	for _, tok := range strings.Fields(buf.String()) {
+	for tok := range strings.FieldsSeq(buf.String()) {
 		if tok == "-s" || tok == "-w" {
 			continue
 		}

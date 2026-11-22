@@ -98,7 +98,7 @@ func TestSetDefaults(t *testing.T) {
 		},
 		{
 			name:  "explicit trimpath false is preserved",
-			input: &Config{Source: SourceConfig{Build: BuildConfig{Trimpath: boolPtr(false)}}},
+			input: &Config{Source: SourceConfig{Build: BuildConfig{Trimpath: new(false)}}},
 			check: func(c *Config) bool {
 				return !c.Source.Build.TrimpathEnabled()
 			},
@@ -123,7 +123,7 @@ func TestSetDefaults(t *testing.T) {
 		{
 			name: "explicit head false is preserved",
 			input: &Config{
-				Formula: FormulaConfig{Head: boolPtr(false)},
+				Formula: FormulaConfig{Head: new(false)},
 				Source:  SourceConfig{Owner: "acme", Repo: "mytool"},
 			},
 			check: func(c *Config) bool {
@@ -134,7 +134,7 @@ func TestSetDefaults(t *testing.T) {
 		{
 			name: "head defaults off when the source build is disabled",
 			input: &Config{
-				Formula: FormulaConfig{Build: FormulaBuildConfig{Enabled: boolPtr(false)}},
+				Formula: FormulaConfig{Build: FormulaBuildConfig{Enabled: new(false)}},
 				Source:  SourceConfig{Owner: "acme", Repo: "mytool"},
 			},
 			check: func(c *Config) bool {
@@ -160,7 +160,7 @@ func TestSetDefaults(t *testing.T) {
 		},
 		{
 			name:  "formula build disabled is preserved",
-			input: &Config{Formula: FormulaConfig{Build: FormulaBuildConfig{Enabled: boolPtr(false)}}},
+			input: &Config{Formula: FormulaConfig{Build: FormulaBuildConfig{Enabled: new(false)}}},
 			check: func(c *Config) bool {
 				return !c.Formula.Build.IsEnabled()
 			},
